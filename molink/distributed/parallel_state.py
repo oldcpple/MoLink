@@ -10,6 +10,9 @@ from torch.distributed import Backend, ProcessGroup
 
 _ENABLE_CUSTOM_ALL_REDUCE = True
 
+_TP: Optional[GroupCoordinator] = None
+_PP: Optional[GroupCoordinator] = None
+
 class MolinkGroupCoordinator(GroupCoordinator):
     
     def __init__(self, 

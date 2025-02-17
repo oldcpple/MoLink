@@ -4,7 +4,7 @@ from vllm.config import ModelConfig
 from vllm.model_executor.models.adapters import (as_classification_model,
                                                  as_embedding_model,
                                                  as_reward_model)
-from molink.model_executor.models import ModelRegistry
+from molink.model_executor.models.registry import ModelRegistry
 
 def get_model_architecture(
         model_config: ModelConfig) -> Tuple[Type[nn.Module], str]:
