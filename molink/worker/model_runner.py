@@ -2,7 +2,7 @@ import torch
 import torch.distributed
 import torch.nn as nn
 import warnings
-import envs
+from vllm import envs
 from vllm.worker.model_runner import GPUModelRunnerBase, ModelRunner
 from vllm.config import CompilationLevel, VllmConfig
 from vllm.distributed.parallel_state import graph_capture
@@ -16,21 +16,15 @@ from vllm.lora.worker_manager import LRUCacheWorkerLoRAManager
 from vllm.prompt_adapter.worker_manager import (
     LRUCacheWorkerPromptAdapterManager)
 from vllm.platforms import current_platform
+from molink.model_executor.model_loader import get_model
 
 
 
 logger = init_logger(__name__)
 
-class MolinkGPUModelRunner(GPUModelRunnerBase):
+class MolinkGPUModelRunner(ModelRunner):
 
-    def load_model(self) -> None:
-        from molink.model_executor.model_loader import get_model
-        '''
-        use get_model method defined in Molink
-        '''
-        super().load_model()
-
-    '''
+    
     def load_model(self) -> None:
         logger.info("Starting to load model %s...", self.model_config.model)
         with DeviceMemoryProfiler() as m:
@@ -113,4 +107,3 @@ class MolinkGPUModelRunner(GPUModelRunnerBase):
                 self.model,
                 fullgraph=envs.VLLM_TEST_DYNAMO_FULLGRAPH_CAPTURE,
                 backend=backend)
-        '''
