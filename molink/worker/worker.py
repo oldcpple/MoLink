@@ -11,6 +11,7 @@ from vllm.model_executor import set_random_seed
 from vllm.distributed import (ensure_kv_transfer_initialized,
                               init_distributed_environment,
                               set_custom_all_reduce)
+from vllm.worker.model_runner import GPUModelRunnerBase
 from molink.distributed.parallel_state import ensure_model_parallel_initialized
 from molink.worker.model_runner import MolinkGPUModelRunner
 
@@ -27,8 +28,22 @@ class MolinkWorker(Worker):
     ) -> None:
         
         '''for current version'''
-        model_runner_cls = Type(MolinkGPUModelRunner)
-        super().__init__(vllm_config, local_rank, rank, distributed_init_method, is_driver_worker, model_runner_cls)
+        #model_runner_cls = MolinkGPUModelRunner
+        super().__init__(vllm_config, local_rank, rank, distributed_init_method, is_driver_worker)
+        speculative_config = self.speculative_config
+        model_config = self.model_config
+        speculative_args = {} if speculative_config is None \
+            or (speculative_config.draft_model_config.model ==
+                model_config.model) \
+            or (speculative_config.draft_model_config.hf_config.model_type
+                not in ["medusa", "mlp_speculator", "eagle"]) \
+                    else {"return_hidden_states": True}
+        self.model_runner: GPUModelRunnerBase = MolinkGPUModelRunner(
+            vllm_config=self.vllm_config,
+            kv_cache_dtype=self.cache_config.cache_dtype,
+            is_driver_worker=is_driver_worker,
+            **speculative_args,
+        )
         
 
 

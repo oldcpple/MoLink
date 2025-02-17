@@ -14,6 +14,10 @@ class PipelineConfig():
         self.initial_peer = initial_peer
         self.serving_layers = serving_layers
 
+@dataclass
 class MolinkConfig(VllmConfig):
 
-    pipeline_config: PipelineConfig = field(default=None, init=True)
+    pipeline_config: PipelineConfig = field(default_factory=PipelineConfig, init=True)
+
+    def _update_attr(self, pipeline_config: PipelineConfig):
+        self.pipeline_config = pipeline_config
