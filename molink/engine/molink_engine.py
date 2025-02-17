@@ -38,7 +38,8 @@ class MolinkEngine(AsyncLLMEngine):
 
         super().__init__(*args, **kwargs)
     
+    @classmethod
     def _get_executor_cls(cls,
                           engine_config: VllmConfig) -> Type[ExecutorBase]:
-        return Type[MolinkMultiprocessingDistributedExecutor]
+        return MolinkMultiprocessingDistributedExecutor
     

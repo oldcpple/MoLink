@@ -22,7 +22,7 @@ from vllm.usage.usage_lib import UsageContext
 from vllm.utils import FlexibleArgumentParser, random_uuid, set_ulimit
 from vllm.version import __version__ as VLLM_VERSION
 
-from molink.engine import MolinkEngine
+from molink.engine.molink_engine import MolinkEngine
 from molink.engine.arg_utils import MolinkEngineArgs
 
 logger = init_logger("vllm.entrypoints.api_server")
@@ -163,7 +163,7 @@ if __name__ == "__main__":
         default=None,
         help="FastAPI root_path when app is behind a path based routing proxy")
     parser.add_argument("--log-level", type=str, default="debug")
-    parser = MolinkEngineArgs.add_cli_args(parser)
+    parser = MolinkEngineArgs().add_cli_args(parser)
     args = parser.parse_args()
 
     asyncio.run(run_server(args))

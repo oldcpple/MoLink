@@ -6,6 +6,7 @@ from vllm.executor.multiproc_worker_utils import (
     set_multiprocessing_worker_envs)
 from vllm.utils import (_run_task_with_lock, get_distributed_init_method,
                         get_ip, get_open_port, make_async)
+from vllm.config import VllmConfig
 from molink.worker.worker_base import MolinkWorkerWrapperBase
 from molink.config import MolinkConfig
 
