@@ -6,12 +6,13 @@ from typing import (TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple,
 import torch
 import torch.distributed
 from torch.distributed import Backend, ProcessGroup
+import vllm.distributed.parallel_state as P
 
 
 _ENABLE_CUSTOM_ALL_REDUCE = True
 
-_TP: Optional[GroupCoordinator] = None
-_PP: Optional[GroupCoordinator] = None
+#_TP: Optional[GroupCoordinator] = None
+#_PP: Optional[GroupCoordinator] = None
 
 class MolinkGroupCoordinator(GroupCoordinator):
     
@@ -103,8 +104,8 @@ def initialize_model_parallel(
     # Build the tensor model-parallel groups.
     num_tensor_model_parallel_groups: int = (world_size //
                                              tensor_model_parallel_size)
-    global _TP
-    assert _TP is None, ("tensor model parallel group is already initialized")
+    #global _TP
+    assert P._TP is None, ("tensor model parallel group is already initialized")
     group_ranks = []
     for i in range(num_tensor_model_parallel_groups):
         ranks = list(
@@ -113,7 +114,7 @@ def initialize_model_parallel(
         group_ranks.append(ranks)
 
     # message queue broadcaster is only used in tensor model parallel group
-    _TP = init_model_parallel_group(group_ranks,
+    P._TP = init_model_parallel_group(group_ranks,
                                     get_world_group().local_rank,
                                     backend,
                                     use_message_queue_broadcaster=True,
@@ -122,15 +123,15 @@ def initialize_model_parallel(
     # Build the pipeline model-parallel groups.
     num_pipeline_model_parallel_groups: int = (world_size //
                                                pipeline_model_parallel_size)
-    global _PP
-    assert _PP is None, (
+    #global _PP
+    assert P._PP is None, (
         "pipeline model parallel group is already initialized")
     group_ranks = []
     for i in range(num_pipeline_model_parallel_groups):
         ranks = list(range(i, world_size, num_pipeline_model_parallel_groups))
         group_ranks.append(ranks)
     # pipeline parallel does not need custom allreduce
-    _PP = init_model_parallel_group_PP(_is_first_rank,
+    P._PP = init_model_parallel_group_PP(_is_first_rank,
                                     _is_last_rank,
                                     group_ranks,
                                     get_world_group().local_rank,
@@ -169,3 +170,4 @@ def ensure_model_parallel_initialized(
         "pipeline parallel group already initialized, but of unexpected size: "
         f"{pp_world_size=} vs. "
         f"{pipeline_model_parallel_size=}")
+    
