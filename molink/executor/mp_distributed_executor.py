@@ -1,5 +1,5 @@
 import asyncio
-from typing import Any, List, Optional
+from typing import Any, Awaitable, Dict, List, Optional, Set, Tuple, Union
 from vllm.executor.mp_distributed_executor import MultiprocessingDistributedExecutor
 from vllm.executor.multiproc_worker_utils import (
     ProcessWorkerWrapper, ResultHandler, WorkerMonitor,
@@ -28,6 +28,9 @@ class MolinkMultiprocessingDistributedExecutor(MultiprocessingDistributedExecuto
         self.speculative_config = vllm_config.speculative_config
         self.prompt_adapter_config = vllm_config.prompt_adapter_config
         self.observability_config = vllm_config.observability_config
+
+        self.parallel_worker_tasks: Optional[Union[Any, Awaitable[Any]]] = None
+
         self._init_executor()
 
     def _init_executor(self) -> None:
