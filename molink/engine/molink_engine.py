@@ -30,6 +30,7 @@ class MolinkEngine(AsyncLLMEngine):
         _is_last_rank = serving_layers[1] == layers_range[1]
         vllm_config.pipeline_config._is_first_rank = _is_first_rank
         vllm_config.pipeline_config._is_last_rank = _is_last_rank
+        vllm_config.pipeline_config.serving_layers = serving_layers
         kwargs['vllm_config'] = vllm_config
 
         self.initial_peer = initial_peer
