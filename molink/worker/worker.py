@@ -11,6 +11,8 @@ from vllm.model_executor import set_random_seed
 from vllm.distributed import (ensure_kv_transfer_initialized,
                               init_distributed_environment,
                               set_custom_all_reduce)
+from vllm.utils import (GiB_bytes, MemorySnapshot, bind_kv_cache,
+                        memory_profiling)
 from vllm.worker.model_runner import GPUModelRunnerBase
 from molink.distributed.parallel_state import ensure_model_parallel_initialized
 from molink.worker.model_runner import MolinkGPUModelRunner
@@ -46,7 +48,6 @@ class MolinkWorker(Worker):
         )
         
 
-
     def init_device(self, _is_first_rank: bool, _is_last_rank: bool,) -> None:
         if self.device_config.device.type == "cuda":
             # torch.distributed.all_reduce does not free the input tensor until
@@ -65,7 +66,8 @@ class MolinkWorker(Worker):
             _check_if_gpu_supports_dtype(self.model_config.dtype)
             gc.collect()
             torch.cuda.empty_cache()
-            self.init_gpu_memory = torch.cuda.mem_get_info()[0]
+            torch.cuda.reset_peak_memory_stats()
+            self.baseline_snapshot = MemorySnapshot()
         else:
             raise RuntimeError(
                 f"Not support device type: {self.device_config.device}")
