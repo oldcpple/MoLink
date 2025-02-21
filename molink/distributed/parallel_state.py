@@ -46,9 +46,11 @@ class MolinkGroupCoordinator(GroupCoordinator):
         self._is_first_rank = _is_first_rank
         self._is_last_rank = _is_last_rank
 
+    @property
     def is_first_rank(self):
         return self._is_first_rank
 
+    @property
     def is_last_rank(self):
         return self._is_last_rank
 
