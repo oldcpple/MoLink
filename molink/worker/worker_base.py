@@ -21,9 +21,6 @@ class MolinkWorkerWrapperBase(WorkerWrapperBase):
 
         from vllm.plugins import load_general_plugins
         load_general_plugins()
-
-        print('*' * 200)
-        print(kwargs)
         with set_current_vllm_config(self.vllm_config):
             # To make vLLM config available during worker initialization
             self.worker = MolinkWorker(**kwargs)
