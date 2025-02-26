@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+service CommService {
+  rpc PushIntermediateTensors (stream GrpcRequestData) returns (GrpcResponseData) {}
+
+  rpc PushSamplerOutput (stream SamplerOutput) returns (GrpcResponseData) {}
+
+  rpc PushSamplerOutput (stream GrpcTriggerRequest) returns (GrpcResponseData) {}
+}
+
+message TensorEntry {
+    string key = 1;
+    bytes tensor_data = 2;
+}
+
+message IntermediateTensors {
+    repeated TensorEntry tensors = 1;
+}
+
+message GrpcRequestData {
+    bytes execute_model_request = 1;
+    IntermediateTensors intermediate_tensors = 2;
+    bytes grpc_metadata = 3;
+    int32 virtual_engine = 4;
+}
+
+message SamplerOutput {
+    bytes output_data = 1;
+    int32 virtual_engine = 2;
+}
+
+message GrpcResponseData {
+    int32 res = 1;
+}
+
+message GrpcTriggerRequest {
+    int32 virtual_engine = 1;
+}
