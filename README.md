@@ -4,7 +4,7 @@
 
 # MoLink Project
 
-MoLink (***Mo***del-***Link***) is a distributed LLM serving systems, aiming to achieve high performance LLM inference services with distributed computing resources that might spread over the Internet. You can also run MoLink over heterogeneous devices. 
+MoLink (***Mo***del-***Link***) is a distributed LLM serving system, aiming to achieve high performance LLM inference services with distributed computing resources that might spread over the Internet. You can also run MoLink over heterogeneous devices. 
 
 ## Installation Guide
 
