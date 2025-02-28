@@ -92,12 +92,12 @@ def initialize_model_parallel(
 ) -> None:
     # Get world size and rank. Ensure some consistencies.
     assert torch.distributed.is_initialized()
-    world_size: int = torch.distributed.get_world_size()
+    world_size: int = tensor_model_parallel_size
     backend = backend or torch.distributed.get_backend(
         get_world_group().device_group)
 
     if (world_size !=
-            tensor_model_parallel_size * pipeline_model_parallel_size):
+            tensor_model_parallel_size):
         raise RuntimeError(
             f"world_size ({world_size}) is not equal to "
             f"tensor_model_parallel_size ({tensor_model_parallel_size}) x "
@@ -123,8 +123,7 @@ def initialize_model_parallel(
                                     group_name="tp")
 
     # Build the pipeline model-parallel groups.
-    num_pipeline_model_parallel_groups: int = (world_size //
-                                               pipeline_model_parallel_size)
+    num_pipeline_model_parallel_groups: int = tensor_model_parallel_size
     #global _PP
     assert P._PP is None, (
         "pipeline model parallel group is already initialized")
