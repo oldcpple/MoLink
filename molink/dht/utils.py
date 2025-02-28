@@ -1,13 +1,10 @@
-from typing import Union, Dict, List, Optional
-from vllm.sequence import (VLLM_INVALID_TOKEN_ID,
-                           CompletionSequenceGroupOutput, Logprob,
-                           PromptLogprobs, SampleLogprobs, SequenceOutput)
-from vllm.model_executor.layers.sampler import SamplerOutput
-from vllm.executor.gpu_executor import GPUExecutorAsync
-from vllm.sequence import ExecuteModelRequest, IntermediateTensors, SequenceGroupMetadata, \
-                         SequenceGroupMetadataDelta, SequenceData, SequenceGroupState
-from vllm.sampling_params import SamplingParams
 import math
+from array import array
+from typing import Union, Dict, List
+from vllm.sequence import (CompletionSequenceGroupOutput, Logprob, SequenceOutput)
+from vllm.model_executor.layers.sampler import SamplerOutput
+from vllm.sampling_params import SamplingParams
+from vllm.sequence import ExecuteModelRequest, SequenceGroupMetadata, SequenceData, SequenceGroupState
 
 def decoding_sampler_outputs(msgspec_sampelr_outputs):
     assert len(msgspec_sampelr_outputs) == 11, "wrong length of SamplerOutput"
@@ -81,9 +78,13 @@ def decoding_execute_model_req(msgspec_emq):
             seq_data: Dict[int, SequenceData] = {}
             for key, value in seq_data_raw.items():
                 key = int(key)
+                _prompt_token_ids = value.get('_prompt_token_ids', array('l'))
+                _prompt_token_ids = array('l', _prompt_token_ids)
+                _output_token_ids = value.get('_output_token_ids', array('l'))
+                _output_token_ids = array('l', _output_token_ids)
                 seq_data[key] = SequenceData(
-                    _prompt_token_ids=[0] + value.get('_prompt_token_ids_tuple', []),
-                    _output_token_ids=value.get('_output_token_ids', []),
+                    _prompt_token_ids=_prompt_token_ids,
+                    _output_token_ids=_output_token_ids,
                     _cumulative_logprob=0.0,
                     _num_computed_tokens=value.get('_num_computed_tokens', 0)
                 )
