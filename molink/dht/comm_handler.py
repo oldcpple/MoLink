@@ -88,7 +88,7 @@ class CommService(comm_pb2_grpc.CommService):
                 server_list = grpc_metadata.get('server_list')
 
                 idx_self = 0
-                this_ip = f'{self.dht_node.ip}:{self.dht_node.node_info.grpc_port}'
+                this_ip = f'{self.bind_executor.dht_node.ip}:{self.bind_executor.dht_node.node_info.grpc_port}'
                 for server in server_list:
                     if server == this_ip:
                         break
