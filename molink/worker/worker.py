@@ -1,8 +1,9 @@
 import gc
 import os
 from typing import Dict, List, Optional, Set, Tuple, Type, Union
-
+import time
 import torch
+import traceback
 import torch.distributed
 from vllm.worker.worker import Worker, _check_if_gpu_supports_dtype
 import vllm.envs as envs
@@ -13,7 +14,10 @@ from vllm.distributed import (ensure_kv_transfer_initialized,
                               set_custom_all_reduce)
 from vllm.utils import (GiB_bytes, MemorySnapshot, bind_kv_cache,
                         memory_profiling)
+from vllm.model_executor.layers.sampler import SamplerOutput
+from vllm.distributed import get_pp_group
 from vllm.worker.model_runner import GPUModelRunnerBase
+from vllm.sequence import IntermediateTensors, ExecuteModelRequest
 from molink.distributed.parallel_state import ensure_model_parallel_initialized
 from molink.worker.model_runner import MolinkGPUModelRunner
 
@@ -80,6 +84,76 @@ class MolinkWorker(Worker):
         # Set random seed.
         set_random_seed(self.model_config.seed)
 
+    def execute_model(
+        self,
+        execute_model_req: Optional[ExecuteModelRequest] = None,
+        intermediate_tensors: Optional[IntermediateTensors] = None,
+    ):
+        """Executes at least one model step on the given sequences, unless no
+        sequences are provided."""
+
+        try:
+            start_time = time.perf_counter()
+            inputs = self.prepare_input(execute_model_req)
+            if inputs is None:
+                return None
+
+            model_input, worker_input, kwargs = inputs
+            num_steps = worker_input.num_steps
+
+            # not surpported in vLLM v0.7.2
+            '''
+            if (execute_model_req is not None and execute_model_req.spec_step_idx):
+                kwargs["spec_step_idx"] = execute_model_req.spec_step_idx
+            '''
+
+            self.execute_worker(worker_input)
+
+            # If there is no input, we don't need to execute the model.
+            if worker_input.num_seq_groups == 0:
+                return []
+
+            orig_model_execute_time = 0.0
+            if not get_pp_group().is_first_rank:
+                if (self.observability_config is not None
+                        and self.observability_config.collect_model_execute_time):
+                    orig_model_execute_time = intermediate_tensors.tensors.get(
+                        "model_execute_time", torch.tensor(0)).item()
+
+            output = self.model_runner.execute_model(
+                model_input=model_input,
+                kv_caches=self.kv_cache[worker_input.virtual_engine]
+                if self.kv_cache is not None else None,
+                intermediate_tensors=intermediate_tensors,
+                num_steps=num_steps,
+                **kwargs,
+            )
+
+            model_execute_time = time.perf_counter() - start_time
+            if not get_pp_group().is_last_rank:
+                # output is IntermediateTensors
+                assert isinstance(output, IntermediateTensors)
+                if (self.observability_config is not None
+                        and self.observability_config.collect_model_execute_time):
+                    output.tensors["model_execute_time"] = torch.tensor(
+                        model_execute_time + orig_model_execute_time)
+                    
+                return [output.tensors]
+
+            if (self.observability_config is not None
+                    and self.observability_config.collect_model_execute_time
+                    and output is not None):
+                for o in output:
+                    o.model_execute_time = (orig_model_execute_time +
+                                            model_execute_time)
+
+            # output is List[SamplerOutput]
+            return output
+        
+        except Exception as e:
+            print(e)
+            traceback.print_exc()
+
 
 def init_worker_distributed_environment(
     _is_first_rank: bool,
@@ -93,7 +167,8 @@ def init_worker_distributed_environment(
     parallel_config = vllm_config.parallel_config
     set_custom_all_reduce(not parallel_config.disable_custom_all_reduce)
 
-    init_distributed_environment(parallel_config.world_size, rank,
+    # world size in MoLink should be tensor_parallel_size
+    init_distributed_environment(parallel_config.tensor_parallel_size, rank,
                                  distributed_init_method, local_rank)
     ensure_model_parallel_initialized(_is_first_rank,
                                       _is_last_rank,
