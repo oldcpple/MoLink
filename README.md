@@ -1,6 +1,4 @@
-
-
-![Example Image](resources/images/original.png)
+<img src="resources/images/original.png" width="200" height="200">
 
 # MoLink Project
 
