@@ -4,11 +4,11 @@
 
 # MoLink Project
 
-MoLink (***Mo***del-***Link***) is a distributed and LLM serving systems, aiming to achieve high performance LLM inference service with distributed computing resources that might spread over the Internet. You can also run MoLink over heterogeneous devices. 
+MoLink (***Mo***del-***Link***) is a distributed LLM serving systems, aiming to achieve high performance LLM inference services with distributed computing resources that might spread over the Internet. You can also run MoLink over heterogeneous devices. 
 
 ## Installation Guide
 
-MoLink is built on top of vLLM, and we will manage to keep it compatible with its latest version, currently we support vLLM v0.7.2. Please ensure that your server meets the requirements for running vLLM, refer to [this](https://docs.vllm.ai/en/latest/).
+MoLink is built on top of vLLM, and will manage to keep compatible with its latest version, currently we support vLLM v0.7.2. Please ensure that your server meets the requirements for running vLLM, refer to [this](https://docs.vllm.ai/en/latest/).
 
 you can install MoLink with the following steps:
 
