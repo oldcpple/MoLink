@@ -3,10 +3,8 @@ import asyncio
 import json
 import socket
 import uuid
-from vllm.logger import init_logger
 from .node_info import NodeInfo
 
-logger = init_logger(__name__)
 
 class DHTNode:
 
@@ -14,52 +12,50 @@ class DHTNode:
         # 50051 is the default port of gRPC server
         # but for testing, multiple gRPC servers might be
         # set on the same node
-        grpc_port = find_unbind_port(50051)
-        dht_port = find_unbind_port(8468)
+        grpc_port = find_unbind_port(50051, 'tcp')
+        dht_port = find_unbind_port(8468, 'udp')
         self.ip = extract_ip()
-
-        grpc_info = f'{self.ip}:{grpc_port}'
-        dht_info = f'{self.ip}:{dht_port}'
-        logger.info("GRPC INFO: MoLink server gRPC works at %s", grpc_info)
-        logger.info("DHT INFO: MoLink server DHT works at %s", dht_info)
-        logger.info("If this is the first node of the swarm, you can copy the DHT INFO as initial peer of the following nodes")
 
         self.uuid = str(uuid.uuid4())
         self.node_info = NodeInfo(self.ip, self.uuid, dht_port, grpc_port, model_name, start_layer, end_layer)
-        self.node = register_node(initial_peer)
+        asyncio.create_task(self.register_node(initial_peer, dht_port))
         asyncio.create_task(self.refresh_registration())
 
     async def store_primary_kv(self):
-        primary_kv = self.node.get('node_info')
+        primary_kv = await self.node.get('node_info')
         if primary_kv is None:
-            primary_kv = [self.uuid]
+            # list object cannot be stored by kademlia
+            primary_kv = json.dumps([self.uuid]).encode('utf-8')
             await self.node.set('node_info', primary_kv)
-        elif self.uuid not in primary_kv:
-            primary_kv.append(self.uuid)
-            await self.node.set('node_info', primary_kv)
+        else:
+            primary_kv = json.loads(primary_kv.decode('utf-8'))
+
+            if self.uuid not in primary_kv:
+                primary_kv.append(self.uuid)
+                primary_kv = json.dumps(primary_kv).encode('utf-8')
+                await self.node.set('node_info', primary_kv)
 
     async def store_sub_kv(self):
-        await self.node.set(self.uuid, self.node_info)
+        await self.node.set(self.uuid, json.dumps(self.node_info.info_dict).encode('utf-8'))
 
     async def refresh_registration(self):
+        await asyncio.sleep(5)
         while True:
             await self.store_primary_kv()
             await self.store_sub_kv()
-            await asyncio.sleep(300)
+            await asyncio.sleep(3)
             
     
-
-async def register_node(initial_peer, port):
-    node = Server()
-    await node.listen(port)
-    # judge
-    if initial_peer is None or initial_peer == '':
-        peer = []
-    else:
-        peer_ip, peer_port = initial_peer.split(':')
-        peer = (peer_ip, peer_port)
-    await node.bootstrap(peer)
-    return node
+    async def register_node(self, initial_peer, port):
+        self.node = Server()
+        await self.node.listen(port)
+        # judge
+        if initial_peer is None or initial_peer == '':
+            peer = []
+        else:
+            peer_ip, peer_port = initial_peer.split(':')
+            peer = [(peer_ip, int(peer_port))]
+        await self.node.bootstrap(peer)
 
 
 import socket
@@ -76,16 +72,23 @@ def extract_ip():
     
     return IP
 
-def find_unbind_port(start_port):
-    IP = extract_ip()
+def find_unbind_port(start_port, protocol):
+    """Find an available port for TCP/UDP on all interfaces."""
+    ip = '0.0.0.0'
     port = start_port
     while True:
         try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as test_sock:
-                test_sock.bind((IP, port))
-                test_sock.close()
-            break
-        except OSError:
+            if protocol == 'tcp':
+                sock_type = socket.SOCK_STREAM
+            elif protocol == 'udp':
+                sock_type = socket.SOCK_DGRAM
+            else:
+                raise ValueError("Protocol must be 'tcp' or 'udp'")
+
+            with socket.socket(socket.AF_INET, sock_type) as s:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                s.bind((ip, port))
+            return port
+        except OSError as e:
+            print(f"Port {port} ({protocol}) is occupied: {e}")
             port += 1
-    
-    return port

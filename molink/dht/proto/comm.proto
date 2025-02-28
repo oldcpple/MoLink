@@ -1,11 +1,11 @@
 syntax = "proto3";
 
 service CommService {
-  rpc PushIntermediateTensors (stream GrpcRequestData) returns (GrpcResponseData) {}
+  rpc PushIntermediateTensors (GrpcRequestData) returns (GrpcResponseData) {}
 
-  rpc PushSamplerOutput (stream SamplerOutput) returns (GrpcResponseData) {}
+  rpc PushSamplerOutput (SamplerOutput) returns (GrpcResponseData) {}
 
-  rpc PushSamplerOutput (stream GrpcTriggerRequest) returns (GrpcResponseData) {}
+  rpc ExecutingWorkerStep (GrpcTriggerRequest) returns (GrpcResponseData) {}
 }
 
 message TensorEntry {
