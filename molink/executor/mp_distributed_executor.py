@@ -280,13 +280,16 @@ class MolinkMultiprocessingDistributedExecutor(MultiprocessingDistributedExecuto
             grpc_metadata = json.dumps(grpc_metadata).encode('utf-8')
             execute_model_req.async_callback = None
 
-            seq_data_dict = execute_model_req.seq_group_metadata_list[0].seq_data
-            for idx, seq_data in seq_data_dict.items():
-                seq_data._prompt_token_ids = list(seq_data._prompt_token_ids)
-                seq_data._output_token_ids = list(seq_data._output_token_ids)
-                seq_data_dict.update({idx : seq_data})
+            len_seq_group = len(execute_model_req.seq_group_metadata_list)
+            for i in range(len_seq_group):
+                seq_data_dict = execute_model_req.seq_group_metadata_list[i].seq_data
+                for idx, seq_data in seq_data_dict.items():
+                    seq_data._prompt_token_ids = list(seq_data._prompt_token_ids)
+                    seq_data._output_token_ids = list(seq_data._output_token_ids)
+                    seq_data_dict.update({idx : seq_data})
 
-            execute_model_req.seq_group_metadata_list[0].seq_data = seq_data_dict
+                execute_model_req.seq_group_metadata_list[i].seq_data = seq_data_dict
+
             #execute_model_req.seq_group_metadata_list = None
             bytes_emr = msgspec.json.encode(execute_model_req)
 

@@ -132,7 +132,7 @@ class CommService(comm_pb2_grpc.CommService):
             # push the result to the head server 
             head_server = grpc_metadata.get('head')
             bytes_sampler_outputs = msgspec.json.encode(pipeline_outputs)
-            grpc_output_data = comm_pb2.SamplerOutput(output_data=bytes_sampler_outputs)
+            grpc_output_data = comm_pb2.SamplerOutput(output_data=bytes_sampler_outputs, virtual_engine = virtual_engine)
 
             if self.bind_executor.preset_next_server is None or self.bind_executor.preset_next_server != head_server:
                 self.bind_executor.preset_next_server = head_server
