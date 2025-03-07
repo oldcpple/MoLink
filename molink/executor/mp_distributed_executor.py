@@ -26,6 +26,139 @@ from molink.dht.proto import comm_pb2, comm_pb2_grpc
 from molink.dht.comm_handler import CommService
 from molink.dht.dht import DHTNode
 from molink.dht.pipeline_manager import PipelineManager
+import threading
+import queue
+from concurrent.futures import ThreadPoolExecutor
+from typing import Optional
+import multiprocessing as mp
+
+mp.set_start_method('spawn', force=True)
+
+class MultiprocessingDeliver(mp.Process):
+    def __init__(self):
+        super().__init__()
+        self.process_queue = mp.Queue(maxsize=100)
+        self.channel_to_next_server = None
+        self.preset_next_server = None
+        self.loop = None
+
+    def _establish_conn_with_next_server(self, next_server):
+        # will be trigger during the ever first run
+        try:
+
+            if self.channel_to_next_server is not None:
+                del self.channel_to_next_server
+            self.channel_to_next_server = aio.insecure_channel(next_server,
+                                    options=[
+                                        ('grpc.max_send_message_length', 200 * 1024 * 1024),  # 200MB
+                                        ('grpc.max_receive_message_length', 200 * 1024 * 1024)  # 200MB
+                                    ])
+
+        except Exception as e:
+            print('Encounter the following exception: {}'.format(e))
+            traceback.print_exc()
+
+    def mp_serialize_intermediate_tensors(self, intermediate_tensors, execute_model_req):
+        len_seq_group = len(execute_model_req.seq_group_metadata_list)
+        for i in range(len_seq_group):
+            seq_data_dict = execute_model_req.seq_group_metadata_list[i].seq_data
+            for idx, seq_data in seq_data_dict.items():
+                seq_data._prompt_token_ids = list(seq_data._prompt_token_ids)
+                seq_data._output_token_ids = list(seq_data._output_token_ids)
+                seq_data_dict[idx] = seq_data
+            execute_model_req.seq_group_metadata_list[i].seq_data = seq_data_dict
+
+        grpc_intermediate_tensors = comm_pb2.IntermediateTensors()
+        for key, tensors in intermediate_tensors.items():
+            buffer = io.BytesIO()
+            torch.save(tensors, buffer)
+            byte_data = buffer.getvalue()
+            grpc_intermediate_tensors.tensors.append(
+                comm_pb2.TensorEntry(key=key, tensor_data=byte_data)
+            )
+        
+        execute_model_req.async_callback = None
+
+        emq = msgspec.json.encode(execute_model_req)
+        
+        return emq, grpc_intermediate_tensors
+
+    async def mp_async_transmit(self, bytes_emr, grpc_intermediate_tensors, grpc_metadata, virtual_engine, next_server):
+        try:
+            if self.preset_next_server != next_server:
+                self._establish_conn_with_next_server(next_server)
+                self.preset_next_server = next_server
+            grpc_request_data = comm_pb2.GrpcRequestData(
+                execute_model_request=bytes_emr,
+                intermediate_tensors=grpc_intermediate_tensors,
+                grpc_metadata=json.dumps(grpc_metadata).encode('utf-8'),
+                virtual_engine=virtual_engine
+            )
+            stub = comm_pb2_grpc.CommServiceStub(self.channel_to_next_server)
+            await stub.PushIntermediateTensors(grpc_request_data)
+            
+        except Exception as e:
+            print(f'Async transmit error: {e}')
+            traceback.print_exc()
+
+    def mp_serialize_sampler_outputs(self, pipeline_outputs, virtual_engine):
+            bytes_sampler_outputs = msgspec.json.encode(pipeline_outputs)
+            return comm_pb2.SamplerOutput(output_data=bytes_sampler_outputs, virtual_engine = virtual_engine)
+
+    async def mp_async_return_results(self, grpc_sampler_outputs, head_server):
+        try:
+            if self.preset_next_server != head_server:
+                self._establish_conn_with_next_server(head_server)
+                self.preset_next_server = head_server
+            stub = comm_pb2_grpc.CommServiceStub(self.channel_to_next_server)
+            await stub.PushSamplerOutput(grpc_sampler_outputs)
+
+        except Exception as e:
+            print(f'Async return error: {e}')
+            traceback.print_exc()
+
+    async def _async_queue_consumer(self):
+        try:
+            while True:
+                intermediate_tensors_or_sampler_outputs, execute_model_req, grpc_metadata, virtual_engine, next_server, push_type = await self.loop.run_in_executor(
+                    None, 
+                    self.process_queue.get
+                )
+
+                if push_type == 'next':
+                    bytes_emr, grpc_intermediate_tensors = self.mp_serialize_intermediate_tensors(intermediate_tensors_or_sampler_outputs,\
+                                                                                                execute_model_req)
+                    asyncio.create_task(
+                        self.mp_async_transmit(bytes_emr, grpc_intermediate_tensors, grpc_metadata, virtual_engine, next_server)
+                    )
+                    del intermediate_tensors_or_sampler_outputs, grpc_intermediate_tensors
+
+                elif push_type == 'head':
+                    grpc_sampler_outputs = self.mp_serialize_sampler_outputs(intermediate_tensors_or_sampler_outputs, virtual_engine)
+                    asyncio.create_task(
+                        self.mp_async_return_results(grpc_sampler_outputs, next_server)
+                    )
+
+        except Exception as e:
+            print('Encounter the following exception: {}'.format(e))
+            traceback.print_exc()
+
+    def mp_deliver_loop(self):
+        self.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.loop)
+        
+        consumer_task = self.loop.create_task(self._async_queue_consumer())
+        
+        try:
+            self.loop.run_forever()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            consumer_task.cancel()
+            self.loop.close()
+
+    def run(self):
+        self.mp_deliver_loop()
 
 
 class MolinkMultiprocessingDistributedExecutor(MultiprocessingDistributedExecutor):
@@ -55,6 +188,8 @@ class MolinkMultiprocessingDistributedExecutor(MultiprocessingDistributedExecuto
         self.grpc_server = None
         self.preset_next_server = None
         self.channel_to_next_server = None
+        self.preset_server_list = []
+        self.stub_list = []
 
         self._init_executor()
 
@@ -131,7 +266,7 @@ class MolinkMultiprocessingDistributedExecutor(MultiprocessingDistributedExecuto
                           max_concurrent_workers=self.parallel_config.
                           max_parallel_loading_workers)
         self.driver_exec_model = make_async(self.driver_worker.execute_model)
-        self.pp_locks: Optional[List[asyncio.Lock]] = None
+        self.pp_lock: Optional[asyncio.Lock] = None
 
         initial_peer = self.pipeline_config.initial_peer
         model_name = self.vllm_config.model_config.model
@@ -157,6 +292,9 @@ class MolinkMultiprocessingDistributedExecutor(MultiprocessingDistributedExecuto
         print("DISTRIBUTED SERVICE INFO: MoLink DHT server works at {}".format(dht_info))
         print("DISTRIBUTED SERVICE INFO: If this is the first node of the swarm, you can copy the DHT INFO as the initial peer of following nodes")
 
+        self.mp_deliver = MultiprocessingDeliver()
+        self.mp_deliver.start()
+        
 
 
     async def _start_grpc_server(self):
@@ -168,21 +306,9 @@ class MolinkMultiprocessingDistributedExecutor(MultiprocessingDistributedExecuto
         except asyncio.CancelledError:
             await self.grpc_server.stop(grace=5)
 
-    def _establish_conn_with_next_server(self, next_server):
-        # will be trigger during the ever first run
-        try:
-
-            if self.channel_to_next_server is not None:
-                del self.channel_to_next_server
-            self.channel_to_next_server = aio.insecure_channel(next_server,
-                                    options=[
-                                        ('grpc.max_send_message_length', 200 * 1024 * 1024),  # 200MB
-                                        ('grpc.max_receive_message_length', 200 * 1024 * 1024)  # 200MB
-                                    ])
-
-        except Exception as e:
-            print('Encounter the following exception: {}'.format(e))
-            traceback.print_exc()
+    def create_stubs(self, server_list):
+        self.preset_server_list = server_list
+        self.stub_list = [comm_pb2_grpc.CommServiceStub(aio.insecure_channel(server)) for server in server_list]
 
 
     async def execute_model_async(
@@ -211,15 +337,12 @@ class MolinkMultiprocessingDistributedExecutor(MultiprocessingDistributedExecuto
             if execute_model_req is None:
                 return
 
-            if self.pp_locks is None:
+            if self.pp_lock is None:
                 # This locks each pipeline parallel stage so multiple virtual
                 # engines can't execute on the same stage at the same time
                 # We create the locks here to avoid creating them in the constructor
                 # which uses a different asyncio loop.
-                self.pp_locks = [
-                    asyncio.Lock()
-                    for _ in range(self.parallel_config.pipeline_parallel_size)
-                ]
+                self.pp_lock = asyncio.Lock()
 
             grpc_metadata = self.pipeline_manager.pipeline_info
             if len(grpc_metadata) <= 0:
@@ -230,23 +353,26 @@ class MolinkMultiprocessingDistributedExecutor(MultiprocessingDistributedExecuto
             server_list = server_list_raw[1:]
 
             tasks = [
-                asyncio.create_task(
-                    _run_task_with_lock(self.executing_head_server, self.pp_locks[0],
-                                        execute_model_req, grpc_metadata))
+                asyncio.create_task(self.executing_head_server(execute_model_req, grpc_metadata))
             ]
 
-            stub_list = [comm_pb2_grpc.CommServiceStub(aio.insecure_channel(server)) for server in server_list]
+            build_stub_list = len(self.preset_server_list) != len(server_list)
+            for i in range(len(self.preset_server_list)):
+                if self.preset_server_list[i] != server_list[i]:
+                    build_stub_list = True
+                    break
+
+            if build_stub_list:
+                self.create_stubs(server_list)
+
             virtual_engine = execute_model_req.virtual_engine
 
             trigger_request = comm_pb2.GrpcTriggerRequest(virtual_engine = virtual_engine)
 
-            for pp_rank, stub in enumerate(stub_list,
+            for pp_rank, stub in enumerate(self.stub_list,
                                                     start=1):
                 tasks.append(
-                    asyncio.create_task(
-                        _run_task_with_lock(stub.ExecutingWorkerStep,
-                                            self.pp_locks[pp_rank],
-                                            trigger_request)))
+                    asyncio.create_task(call_stub(stub, trigger_request)))
                 
             results = await self.comm_handler.output_queue[virtual_engine].get()
 
@@ -256,67 +382,36 @@ class MolinkMultiprocessingDistributedExecutor(MultiprocessingDistributedExecuto
             print('Encounter the following exception: {}'.format(e))
             traceback.print_exc()
     
-    async def executing_head_server(self, execute_model_req: Optional[ExecuteModelRequest] = None, grpc_metadata: Optional[dict] = None):
-
+    async def executing_head_server(
+        self, 
+        execute_model_req: Optional[ExecuteModelRequest] = None, 
+        grpc_metadata: Optional[dict] = None
+    ):
         try:
             virtual_engine = execute_model_req.virtual_engine
 
-            # if pipeline parallel size >= 2, it's [IntermediateTensors.tensors]
-            # otherwise it's [SamplerOutput]
-            outputs = await self.driver_exec_model(execute_model_req)
-
-            if len(grpc_metadata) <= 0:
-                server_list = []
-            else:
-                server_list = grpc_metadata.get('server_list')
-            # ip : grpc_port
-
+            async with self.pp_lock:
+                outputs = await self.driver_exec_model(execute_model_req)
+            
+            server_list = grpc_metadata.get('server_list', []) if grpc_metadata else []
             if len(server_list) <= 1:
                 self.comm_handler.output_queue[virtual_engine].put_nowait(outputs)
                 return
-            
-            outputs = outputs[0]
+
             next_server = server_list[1]
-            grpc_metadata = json.dumps(grpc_metadata).encode('utf-8')
-            execute_model_req.async_callback = None
 
-            len_seq_group = len(execute_model_req.seq_group_metadata_list)
-            for i in range(len_seq_group):
-                seq_data_dict = execute_model_req.seq_group_metadata_list[i].seq_data
-                for idx, seq_data in seq_data_dict.items():
-                    seq_data._prompt_token_ids = list(seq_data._prompt_token_ids)
-                    seq_data._output_token_ids = list(seq_data._output_token_ids)
-                    seq_data_dict.update({idx : seq_data})
+            intermediate_tensors = outputs[0]
 
-                execute_model_req.seq_group_metadata_list[i].seq_data = seq_data_dict
+            intermediate_tensors_cpu = {k: v.to('cpu') for k, v in intermediate_tensors.items()}
 
-            #execute_model_req.seq_group_metadata_list = None
-            bytes_emr = msgspec.json.encode(execute_model_req)
-
-            intermediate_tensors = outputs
-            grpc_intermediate_tensors = comm_pb2.IntermediateTensors()
-            for key, tensors in intermediate_tensors.items():
-                buffer = io.BytesIO()
-                torch.save(tensors, buffer)
-                byte_data = buffer.getvalue()
-                grpc_intermediate_tensors.tensors.append(comm_pb2.TensorEntry(key = key,
-                                                                                    tensor_data = byte_data))
-
-            grpc_request_data = comm_pb2.GrpcRequestData(execute_model_request = bytes_emr,
-                                                            intermediate_tensors = grpc_intermediate_tensors,
-                                                            grpc_metadata = grpc_metadata,
-                                                            virtual_engine = virtual_engine)
-            
-            # case 1: first run
-            # case 2: the pipeline path has changed
-            if self.preset_next_server is None or self.preset_next_server != next_server:
-                self.preset_next_server = next_server
-                self._establish_conn_with_next_server(next_server)
-
-            assert self.channel_to_next_server is not None, 'Connection to next server has not been properly set'
-            stub = comm_pb2_grpc.CommServiceStub(self.channel_to_next_server)
-            res = await stub.PushIntermediateTensors(grpc_request_data)
+            # data serializetion and transmission will be handled in another process
+            # thus this process would be overlapped with the valuable computation
+            self.mp_deliver.process_queue.put_nowait((intermediate_tensors_cpu, execute_model_req, grpc_metadata, \
+                                                     virtual_engine, next_server, 'next'))
 
         except Exception as e:
-            print('Encounter the following exception: {}'.format(e))
+            print(f'Exception in executing_head_server: {e}')
             traceback.print_exc()
+
+async def call_stub(stub, trigger_request):
+    return await stub.ExecutingWorkerStep(trigger_request)
