@@ -12,7 +12,7 @@ from vllm.outputs import PoolingRequestOutput, RequestOutput
 from vllm.sequence import ExecuteModelRequest
 from molink.config import MolinkConfig, PipelineConfig
 from molink.executor.mp_distributed_executor import MolinkMultiprocessingDistributedExecutor
-
+import time
 class _MolinkEngine(_AsyncLLMEngine):
 
     async def step_async(
@@ -29,6 +29,7 @@ class _MolinkEngine(_AsyncLLMEngine):
         """
         # these are cached outputs from previous iterations. None if on first
         # iteration
+
         cached_outputs = self.cached_scheduler_outputs[virtual_engine]
         seq_group_metadata_list = cached_outputs.seq_group_metadata_list
         scheduler_outputs = cached_outputs.scheduler_outputs

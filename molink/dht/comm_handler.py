@@ -22,6 +22,7 @@ class CommService(comm_pb2_grpc.CommService):
         self.bind_executor = executor
         self.input_queue = [asyncio.Queue() for _ in range(pipeline_size)]
         self.output_queue = [asyncio.Queue() for _ in range(pipeline_size)]
+        self.pp_lock = asyncio.Lock()
 
     async def PushIntermediateTensors(self, request: comm_pb2.GrpcRequestData, context: aio.ServicerContext):
         try:
@@ -67,22 +68,27 @@ class CommService(comm_pb2_grpc.CommService):
             virtual_engine = request.virtual_engine
             execute_model_req, intermediate_tensors, grpc_metadata = await self.input_queue[virtual_engine].get()
 
-            temp = IntermediateTensors(tensors={})
-            for k, v in intermediate_tensors.items():
-                tensors = torch.load(io.BytesIO(v), map_location='cuda')
-                temp.tensors.update({k: tensors})
-            intermediate_tensors = temp
- 
-            pipeline_outputs = await self.bind_executor.driver_exec_model(execute_model_req, intermediate_tensors)
+            # 将张量反序列化操作提交到线程池
+            def process_tensors(intermediate_tensors):
+                temp = IntermediateTensors(tensors={})
+                for k, v in intermediate_tensors.items():
+                    tensors = torch.load(io.BytesIO(v), map_location='cuda')
+                    temp.tensors.update({k: tensors})
+                return temp
+
+            # 使用默认线程池执行阻塞操作（约5行核心修改）
+            intermediate_tensors = await asyncio.to_thread(process_tensors, intermediate_tensors)
+
+            async with self.pp_lock:
+                pipeline_outputs = await self.bind_executor.driver_exec_model(execute_model_req, intermediate_tensors)
+
+                
             pipeline_outputs = pipeline_outputs[0]
             
             can_push = not get_pp_group().is_last_rank
 
             if not can_push and get_pp_group().is_first_rank:
-                bytes_sampler_outputs = msgspec.json.encode(pipeline_outputs)
-                outputs = msgspec.json.decode(bytes_sampler_outputs)
-                outputs = [decoding_sampler_outputs(outputs)]
-                return outputs
+                return comm_pb2.GrpcResponseData(res = 0)
 
             if can_push:
                 server_list = grpc_metadata.get('server_list')
@@ -99,49 +105,19 @@ class CommService(comm_pb2_grpc.CommService):
                     return
                 # ip : grpc_port
                 next_server = server_list[idx_self + 1]
-                grpc_metadata = json.dumps(grpc_metadata).encode('utf-8')
-                execute_model_req.async_callback = None
-                bytes_emr = msgspec.json.encode(execute_model_req)
 
-                intermediate_tensors = pipeline_outputs
-                grpc_intermediate_tensors = comm_pb2.IntermediateTensors()
-                for key, tensors in intermediate_tensors.items():
-                    buffer = io.BytesIO()
-                    torch.save(tensors, buffer)
-                    byte_data = buffer.getvalue()
-                    grpc_intermediate_tensors.tensors.append(comm_pb2.TensorEntry(key = key,
-                                                                                    tensor_data = byte_data))
-
-                grpc_request_data = comm_pb2.GrpcRequestData(execute_model_request = bytes_emr,
-                                                                intermediate_tensors = grpc_intermediate_tensors,
-                                                                grpc_metadata = grpc_metadata,
-                                                                virtual_engine = virtual_engine)
-                
-                # case 1: first run
-                # case 2: the pipeline path has changed
-                if self.bind_executor.preset_next_server is None or self.bind_executor.preset_next_server != next_server:
-                    self.bind_executor.preset_next_server = next_server
-                    self.bind_executor._establish_conn_with_next_server(next_server)
-                    
-                assert self.bind_executor.channel_to_next_server is not None, 'Connection to next server has not been properly set'
-                stub = comm_pb2_grpc.CommServiceStub(self.bind_executor.channel_to_next_server)
-                res = await stub.PushIntermediateTensors(grpc_request_data)
-                return []
+                intermediate_tensors_cpu = {k: v.to('cpu') for k, v in pipeline_outputs.items()}
+                self.bind_executor.mp_deliver.process_queue.put_nowait((intermediate_tensors_cpu, execute_model_req, grpc_metadata, \
+                                            virtual_engine, next_server, 'next'))
             
             # the last server in the pipeline
             # push the result to the head server 
+            # pipeline_outpus should be type of SamplerOutput
+
             head_server = grpc_metadata.get('head')
-            bytes_sampler_outputs = msgspec.json.encode(pipeline_outputs)
-            grpc_output_data = comm_pb2.SamplerOutput(output_data=bytes_sampler_outputs, virtual_engine = virtual_engine)
-
-            if self.bind_executor.preset_next_server is None or self.bind_executor.preset_next_server != head_server:
-                self.bind_executor.preset_next_server = head_server
-                self.bind_executor._establish_conn_with_next_server(head_server)
-                
-            assert self.bind_executor.channel_to_next_server is not None, 'Connection to next server has not been properly set'
-
-            stub = comm_pb2_grpc.CommServiceStub(self.bind_executor.channel_to_next_server)
-            res = await stub.PushSamplerOutput(grpc_output_data)
+            self.bind_executor.mp_deliver.process_queue.put_nowait((pipeline_outputs, execute_model_req, grpc_metadata, \
+                            virtual_engine, head_server, 'head'))
+            
             return comm_pb2.GrpcResponseData(res = 1)
         
         except Exception as e:
