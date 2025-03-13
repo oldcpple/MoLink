@@ -8,7 +8,8 @@ def get_pp_indices(config: MolinkConfig) -> Tuple[int, int]:
     serving_layers = config.pipeline_config.serving_layers
     assert len(serving_layers) >= 1, 'serving layers no specified'
     start_layer = serving_layers[0]
-    end_layer = serving_layers[-1]
+    # to be compatible with vLLM's impl, the right side should be close
+    end_layer = serving_layers[-1] + 1
     return (start_layer, end_layer)
 
 def make_layers(
