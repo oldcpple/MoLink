@@ -109,6 +109,7 @@ class CommService(comm_pb2_grpc.CommService):
                 intermediate_tensors_cpu = {k: v.to('cpu') for k, v in pipeline_outputs.items()}
                 self.bind_executor.mp_deliver.process_queue.put_nowait((intermediate_tensors_cpu, execute_model_req, grpc_metadata, \
                                             virtual_engine, next_server, 'next'))
+                return comm_pb2.GrpcResponseData(res = 1)
             
             # the last server in the pipeline
             # push the result to the head server 
