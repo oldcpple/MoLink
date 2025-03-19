@@ -12,6 +12,7 @@ from vllm.outputs import PoolingRequestOutput, RequestOutput
 from vllm.sequence import ExecuteModelRequest
 from molink.config import MolinkConfig, PipelineConfig
 from molink.executor.mp_distributed_executor import MolinkMultiprocessingDistributedExecutor
+import molink.distributed.parallel_state as P
 import time
 class _MolinkEngine(_AsyncLLMEngine):
 
@@ -179,6 +180,10 @@ class MolinkEngine(AsyncLLMEngine):
         config = kwargs.get('vllm_config')
         initial_peer = kwargs.get('initial_peer')
         serving_layers = kwargs.get('serving_layers')
+        use_dht = kwargs.get('use_dht')
+        port = kwargs.get('port')
+        P.USE_DHT = use_dht
+        P.NODE_PORT = port
         model_config = config.model_config
         num_all_layers = model_config.hf_config.num_hidden_layers
         layers_range = [0, num_all_layers - 1]
@@ -203,6 +208,7 @@ class MolinkEngine(AsyncLLMEngine):
         self.serving_layers = serving_layers
         del kwargs['initial_peer']
         del kwargs['serving_layers']
+        del kwargs['use_dht']
 
         super().__init__(*args, **kwargs)
     
