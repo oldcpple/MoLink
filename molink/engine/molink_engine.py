@@ -191,7 +191,7 @@ class MolinkEngine(AsyncLLMEngine):
         base_port = 38000
         for i in range(autodl_worker_num):
             P.AUTODL_SERVER_IP_MAP.append(f'localhost:{base_port + i}')
-            
+
         model_config = config.model_config
         num_all_layers = model_config.hf_config.num_hidden_layers
         layers_range = [0, num_all_layers - 1]

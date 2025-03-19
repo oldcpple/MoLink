@@ -24,6 +24,22 @@ class CommService(comm_pb2_grpc.CommService):
         self.input_queue = [asyncio.Queue() for _ in range(pipeline_size)]
         self.output_queue = [asyncio.Queue() for _ in range(pipeline_size)]
         self.pp_lock = asyncio.Lock()
+        self.node_pool = []
+        self.node_info_dict = {}
+
+    async def JoinPipeline(self, request: comm_pb2.NodeInfo, context: aio.ServicerContext):
+        try:
+            node_ip = request.ip
+            start_layer = request.start_layer
+            end_layer = request.end_layer
+            self.node_pool.append({'ip':node_ip, 'start_layer':start_layer, 'end_layer':end_layer})
+            self.node_info_dict.update({node_ip : start_layer})
+            return comm_pb2.GrpcResponseData(res = 1)
+        
+        except Exception as e:
+            print('Encounter the following exception: {}'.format(e))
+            traceback.print_exc()
+
 
     async def PushIntermediateTensors(self, request: comm_pb2.GrpcRequestData, context: aio.ServicerContext):
         try:
