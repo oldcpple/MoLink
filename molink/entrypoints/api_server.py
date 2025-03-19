@@ -8,6 +8,7 @@ change `vllm/entrypoints/openai/api_server.py` instead.
 import asyncio
 import json
 import ssl
+import requests
 from argparse import Namespace
 from typing import Any, AsyncGenerator, Optional
 
@@ -31,6 +32,9 @@ TIMEOUT_KEEP_ALIVE = 5  # seconds.
 app = FastAPI()
 engine = None
 
+node_pool = []
+node_info = {}
+head_info = {}
 
 @app.get("/health")
 async def health() -> Response:
@@ -49,6 +53,26 @@ async def generate(request: Request) -> Response:
     """
     request_dict = await request.json()
     return await _generate(request_dict, raw_request=request)
+
+@app.post("/join")
+async def join(request: Request) -> Response:
+    request_dict = await request.json()
+    node_pool.append(request_dict)
+    type = request_dict.get('type')
+    if type == 'head':
+        node_ip = request_dict.get('ip')
+        head_info.update({'head':node_ip})
+    node_start_layer = request_dict.get('start_layer')
+    node_pool.update({node_ip : node_start_layer})
+    return {'status' : 'Successfully Connected'}
+
+@app.post("/grpc")
+async def join(request: Request) -> Response:
+    head_ip = head_info.get('ip')
+    grpc_metadata = {'head' : head_ip}
+    sorted_ips = [ip for ip, _ in sorted(node_info.items(), key=lambda item: item[1])]
+    grpc_metadata.update({'server_list' : sorted_ips})
+    return grpc_metadata
 
 
 @with_cancellation
