@@ -304,31 +304,29 @@ class MolinkMultiprocessingDistributedExecutor(MultiprocessingDistributedExecuto
         else:
             port = find_unbind_port(50051, 'tcp')
             self.grpc_port = port
+            node_ip = extract_ip()
+            self.ip = node_ip
+            grpc_info = f'{self.ip}:{self.grpc_port}'
+            print("DISTRIBUTED SERVICE INFO: MoLink gRPC server works at {}, ".format(grpc_info))
+            print("DISTRIBUTED SERVICE INFO: If this is the first node of the swarm, you can copy the GRPC INFO as the initial peer of following nodes")
+            
+            if initial_peer is not None and initial_peer != '': 
+                stub = comm_pb2_grpc.CommServiceStub(aio.insecure_channel(initial_peer))
+                node_info = comm_pb2.NodeInfo(
+                    ip = f'{self.ip}:{self.grpc_port}',
+                    start_layer = start_layer,
+                    end_layer = end_layer,
+                )
+                asyncio.create_task(stub_join_pipeline(stub, node_info))
+            else:
+                # this is the head node
+                self.comm_handler.node_pool.append({'ip':f'{self.ip}:{self.grpc_port}', 'start_layer':start_layer, 'end_layer':end_layer})
+                self.comm_handler.node_info_dict.update({f'{self.ip}:{self.grpc_port}' : start_layer})
+
         self.grpc_server.add_insecure_port('[::]:{}'.format(port))
         asyncio.create_task(self._start_grpc_server())
         self.mp_deliver = MultiprocessingDeliver()
         self.mp_deliver.start()
-
-        node_ip = extract_ip()
-        self.ip = node_ip
-        if initial_peer is not None and initial_peer != '': 
-            info_dict = {'type' : 'node', 'ip' : f'{node_ip}:{port}', 'start_layer':start_layer, 'end_layer':end_layer}
-            requests.post(
-                f"{initial_peer}/join",
-                json=info_dict,
-            )
-        else:
-            info_dict = {'type' : 'head', 'ip' : f'{node_ip}:{port}', 'start_layer':start_layer, 'end_layer':end_layer}
-            import molink.entrypoints.api_server as app
-            app.node_pool.append(info_dict)
-            app.node_ip = info_dict.get('ip')
-            app.head_info.update({'head':node_ip})
-            '''
-            requests.post(
-                f"0.0.0.0:{P.NODE_PORT}/join",
-                json=info_dict,
-            )'
-            '''
         
     async def _start_grpc_server(self):
         try:
@@ -381,15 +379,8 @@ class MolinkMultiprocessingDistributedExecutor(MultiprocessingDistributedExecuto
                 if self.use_dht:
                     grpc_metadata = self.pipeline_manager.pipeline_info
                 else:
-                    response = requests.post(
-                            f"http://0.0.0.0:{P.NODE_PORT}/grpc",
-                            json={},
-                        )
-                    print(response)
-                    print(type(response))
-                    grpc_metadata = response.json()
-                    print(grpc_metadata)
-                    print(type(grpc_metadata))
+                    node_info_dict = self.comm_handler.node_info_dict.copy()
+                    grpc_metadata = get_grpc_metadata(f'{self.ip}:{self.grpc_port}', node_info_dict)
                 if len(grpc_metadata) <= 0:
                     server_list_raw = []
                 else:
@@ -472,3 +463,14 @@ class MolinkMultiprocessingDistributedExecutor(MultiprocessingDistributedExecuto
 
 async def call_stub(stub, trigger_request):
     return await stub.ExecutingWorkerStep(trigger_request)
+
+async def stub_join_pipeline(stub, node_info):
+    return await stub.JoinPipeline(node_info)
+
+def get_grpc_metadata(head_ip, node_info_dict: dict):
+    sorted_ips = [ip for ip, _ in sorted(node_info_dict.items(), key=lambda item: item[1])]
+
+    pipeline_info = {}
+    pipeline_info.update({'head' : head_ip})
+    pipeline_info.update({'server_list' : sorted_ips})
+    return pipeline_info

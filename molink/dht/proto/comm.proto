@@ -6,6 +6,8 @@ service CommService {
   rpc PushSamplerOutput (SamplerOutput) returns (GrpcResponseData) {}
 
   rpc ExecutingWorkerStep (GrpcTriggerRequest) returns (GrpcResponseData) {}
+
+  rpc JoinPipeline (NodeInfo) returns (GrpcResponseData) {}
 }
 
 message TensorEntry {
@@ -35,4 +37,10 @@ message GrpcResponseData {
 
 message GrpcTriggerRequest {
     int32 virtual_engine = 1;
+}
+
+message NodeInfo{
+    string ip = 1;
+    int32 start_layer = 2;
+    int32 end_layer = 3;
 }

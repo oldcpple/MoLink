@@ -49,6 +49,11 @@ class CommServiceStub(object):
                 request_serializer=comm__pb2.GrpcTriggerRequest.SerializeToString,
                 response_deserializer=comm__pb2.GrpcResponseData.FromString,
                 _registered_method=True)
+        self.JoinPipeline = channel.unary_unary(
+                '/CommService/JoinPipeline',
+                request_serializer=comm__pb2.NodeInfo.SerializeToString,
+                response_deserializer=comm__pb2.GrpcResponseData.FromString,
+                _registered_method=True)
 
 
 class CommServiceServicer(object):
@@ -72,6 +77,12 @@ class CommServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def JoinPipeline(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_CommServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -88,6 +99,11 @@ def add_CommServiceServicer_to_server(servicer, server):
             'ExecutingWorkerStep': grpc.unary_unary_rpc_method_handler(
                     servicer.ExecutingWorkerStep,
                     request_deserializer=comm__pb2.GrpcTriggerRequest.FromString,
+                    response_serializer=comm__pb2.GrpcResponseData.SerializeToString,
+            ),
+            'JoinPipeline': grpc.unary_unary_rpc_method_handler(
+                    servicer.JoinPipeline,
+                    request_deserializer=comm__pb2.NodeInfo.FromString,
                     response_serializer=comm__pb2.GrpcResponseData.SerializeToString,
             ),
     }
@@ -171,6 +187,33 @@ class CommService(object):
             target,
             '/CommService/ExecutingWorkerStep',
             comm__pb2.GrpcTriggerRequest.SerializeToString,
+            comm__pb2.GrpcResponseData.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def JoinPipeline(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/CommService/JoinPipeline',
+            comm__pb2.NodeInfo.SerializeToString,
             comm__pb2.GrpcResponseData.FromString,
             options,
             channel_credentials,
