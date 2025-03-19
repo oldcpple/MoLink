@@ -12,6 +12,9 @@ import vllm.distributed.parallel_state as P
 _ENABLE_CUSTOM_ALL_REDUCE = True
 USE_DHT = False
 NODE_PORT = ''
+IN_AUTODL = False
+AUTODL_WORKER_NUM = 0
+AUTODL_SERVER_IP_MAP = []
 
 #_TP: Optional[GroupCoordinator] = None
 #_PP: Optional[GroupCoordinator] = None
