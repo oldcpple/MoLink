@@ -319,13 +319,17 @@ class MolinkMultiprocessingDistributedExecutor(MultiprocessingDistributedExecuto
             )
         else:
             info_dict = {'type' : 'head', 'ip' : f'{node_ip}:{port}', 'start_layer':start_layer, 'end_layer':end_layer}
+            import molink.entrypoints.api_server as app
+            app.node_pool.append(info_dict)
+            app.node_ip = info_dict.get('ip')
+            app.head_info.update({'head':node_ip})
+            '''
             requests.post(
-                f"localhost:{P.NODE_PORT}/join",
+                f"0.0.0.0:{P.NODE_PORT}/join",
                 json=info_dict,
-            )
+            )'
+            '''
         
-
-
     async def _start_grpc_server(self):
         try:
 
@@ -373,20 +377,29 @@ class MolinkMultiprocessingDistributedExecutor(MultiprocessingDistributedExecuto
                 # which uses a different asyncio loop.
                 self.pp_lock = asyncio.Lock()
 
-            if self.use_dht:
-                grpc_metadata = self.pipeline_manager.pipeline_info
+            if not P.IN_AUTODL:
+                if self.use_dht:
+                    grpc_metadata = self.pipeline_manager.pipeline_info
+                else:
+                    response = requests.post(
+                            f"http://0.0.0.0:{P.NODE_PORT}/grpc",
+                            json={},
+                        )
+                    print(response)
+                    print(type(response))
+                    grpc_metadata = response.json()
+                    print(grpc_metadata)
+                    print(type(grpc_metadata))
+                if len(grpc_metadata) <= 0:
+                    server_list_raw = []
+                else:
+                    server_list_raw = grpc_metadata.get('server_list')
+                # pop the head server
+                server_list = server_list_raw[1:]
+            
             else:
-                response = requests.post(
-                        "localhost/grpc",
-                        json={},
-                    )
-                grpc_metadata = response
-            if len(grpc_metadata) <= 0:
-                server_list_raw = []
-            else:
-                server_list_raw = grpc_metadata.get('server_list')
-            # pop the head server
-            server_list = server_list_raw[1:]
+                grpc_metadata = {}
+                server_list = P.AUTODL_SERVER_IP_MAP
 
             tasks = [
                 asyncio.create_task(self.executing_head_server(execute_model_req, grpc_metadata))
@@ -429,12 +442,18 @@ class MolinkMultiprocessingDistributedExecutor(MultiprocessingDistributedExecuto
             async with self.pp_lock:
                 outputs = await self.driver_exec_model(execute_model_req)
             
-            server_list = grpc_metadata.get('server_list', []) if grpc_metadata else []
-            if len(server_list) <= 1:
-                self.comm_handler.output_queue[virtual_engine].put_nowait(outputs)
-                return
+            if not P.IN_AUTODL:
+                server_list = grpc_metadata.get('server_list', []) if grpc_metadata else []
+                if len(server_list) <= 1:
+                    self.comm_handler.output_queue[virtual_engine].put_nowait(outputs)
+                    return
 
-            next_server = server_list[1]
+                next_server = server_list[1]
+
+            else:
+                # if we are in autoDL environment, the next grpc server address should be 
+                # mapped to localhost:38000, since no direct connection is allowed
+                next_server = 'localhost:38000'
 
             intermediate_tensors = outputs[0]
 
@@ -442,6 +461,8 @@ class MolinkMultiprocessingDistributedExecutor(MultiprocessingDistributedExecuto
 
             # data serializetion and transmission will be handled in another process
             # thus this process would be overlapped with the valuable computation
+
+            execute_model_req.async_callback = None
             self.mp_deliver.process_queue.put_nowait((intermediate_tensors_cpu, execute_model_req, grpc_metadata, \
                                                      virtual_engine, next_server, 'next'))
 

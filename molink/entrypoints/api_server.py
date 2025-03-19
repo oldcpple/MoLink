@@ -64,7 +64,7 @@ async def join(request: Request) -> Response:
         head_info.update({'head':node_ip})
     node_start_layer = request_dict.get('start_layer')
     node_pool.update({node_ip : node_start_layer})
-    return {'status' : 'Successfully Connected'}
+    return JSONResponse({'status' : 'Successfully Connected'})
 
 @app.post("/grpc")
 async def join(request: Request) -> Response:
@@ -72,7 +72,9 @@ async def join(request: Request) -> Response:
     grpc_metadata = {'head' : head_ip}
     sorted_ips = [ip for ip, _ in sorted(node_info.items(), key=lambda item: item[1])]
     grpc_metadata.update({'server_list' : sorted_ips})
-    return grpc_metadata
+    if len(grpc_metadata) <= 0:
+        return JSONResponse({'response' : 'no content'})
+    return JSONResponse(grpc_metadata)
 
 
 @with_cancellation

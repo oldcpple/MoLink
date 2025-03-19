@@ -182,8 +182,16 @@ class MolinkEngine(AsyncLLMEngine):
         serving_layers = kwargs.get('serving_layers')
         use_dht = kwargs.get('use_dht')
         port = kwargs.get('port')
+        in_autodl = kwargs.get('in_autodl')
+        autodl_worker_num = kwargs.get('autodl_worker_num')
         P.USE_DHT = use_dht
         P.NODE_PORT = port
+        P.IN_AUTODL = in_autodl
+        P.AUTODL_WORKER_NUM = autodl_worker_num
+        base_port = 38000
+        for i in range(autodl_worker_num):
+            P.AUTODL_SERVER_IP_MAP.append(f'localhost:{base_port + i}')
+            
         model_config = config.model_config
         num_all_layers = model_config.hf_config.num_hidden_layers
         layers_range = [0, num_all_layers - 1]
@@ -209,6 +217,8 @@ class MolinkEngine(AsyncLLMEngine):
         del kwargs['initial_peer']
         del kwargs['serving_layers']
         del kwargs['use_dht']
+        del kwargs['port']
+        del kwargs['in_autodl']
 
         super().__init__(*args, **kwargs)
     
@@ -244,5 +254,9 @@ class MolinkEngine(AsyncLLMEngine):
             stat_loggers=stat_loggers,
             initial_peer = engine_args.initial_peer,
             serving_layers = engine_args.serving_layers,
+            use_dht = engine_args.use_dht,
+            port = engine_args.port,
+            in_autodl = engine_args.in_autodl,
+            autodl_worker_num = engine_args.autodl_worker_num,
         )
         return engine
