@@ -7,6 +7,7 @@ import msgspec
 import grpc
 import copy
 import traceback
+import requests
 from grpc import aio
 from concurrent import futures
 from typing import Any, Awaitable, Dict, List, Optional, Set, Tuple, Union
@@ -24,13 +25,14 @@ from molink.worker.worker_base import MolinkWorkerWrapperBase
 from molink.config import MolinkConfig
 from molink.dht.proto import comm_pb2, comm_pb2_grpc
 from molink.dht.comm_handler import CommService
-from molink.dht.dht import DHTNode
+from molink.dht.dht import DHTNode, find_unbind_port, extract_ip
 from molink.dht.pipeline_manager import PipelineManager
 import threading
 import queue
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 import multiprocessing as mp
+import molink.distributed.parallel_state as P
 
 mp.set_start_method('spawn', force=True)
 
@@ -190,6 +192,7 @@ class MolinkMultiprocessingDistributedExecutor(MultiprocessingDistributedExecuto
         self.channel_to_next_server = None
         self.preset_server_list = []
         self.stub_list = []
+        self.use_dht = False
 
         self._init_executor()
 
@@ -272,8 +275,9 @@ class MolinkMultiprocessingDistributedExecutor(MultiprocessingDistributedExecuto
         model_name = self.vllm_config.model_config.model
         start_layer = self.pipeline_config.serving_layers[0]
         end_layer = self.pipeline_config.serving_layers[1]
-        self.dht_node = DHTNode(initial_peer, model_name, start_layer, end_layer)
-        self.pipeline_manager = PipelineManager(self.dht_node)
+
+
+
         self.comm_handler = CommService(self.parallel_config.pipeline_parallel_size, self)
         self.grpc_server = aio.server(futures.ThreadPoolExecutor(max_workers=10),
                                             options=[
@@ -281,19 +285,44 @@ class MolinkMultiprocessingDistributedExecutor(MultiprocessingDistributedExecuto
                                                 ('grpc.max_receive_message_length', 200 * 1024 * 1024)  # 200MB
                                             ])
         comm_pb2_grpc.add_CommServiceServicer_to_server(self.comm_handler, self.grpc_server)
-        port = self.dht_node.node_info.grpc_port
+
+        self.use_dht = P.USE_DHT
+        if self.use_dht:
+            self.dht_node = DHTNode(initial_peer, model_name, start_layer, end_layer)
+            self.pipeline_manager = PipelineManager(self.dht_node)
+            port = self.dht_node.node_info.grpc_port
+            self.grpc_port = port
+            self.ip = self.dht_node.ip
+
+            grpc_info = f'{self.dht_node.ip}:{self.dht_node.node_info.grpc_port}'
+            dht_info = f'{self.dht_node.ip}:{self.dht_node.node_info.dht_port}'
+
+            print("DISTRIBUTED SERVICE INFO: MoLink gRPC server works at {}, ".format(grpc_info))
+            print("DISTRIBUTED SERVICE INFO: MoLink DHT server works at {}".format(dht_info))
+            print("DISTRIBUTED SERVICE INFO: If this is the first node of the swarm, you can copy the DHT INFO as the initial peer of following nodes")
+
+        else:
+            port = find_unbind_port(50051, 'tcp')
+            self.grpc_port = port
         self.grpc_server.add_insecure_port('[::]:{}'.format(port))
         asyncio.create_task(self._start_grpc_server())
-
-        grpc_info = f'{self.dht_node.ip}:{self.dht_node.node_info.grpc_port}'
-        dht_info = f'{self.dht_node.ip}:{self.dht_node.node_info.dht_port}'
-
-        print("DISTRIBUTED SERVICE INFO: MoLink gRPC server works at {}, ".format(grpc_info))
-        print("DISTRIBUTED SERVICE INFO: MoLink DHT server works at {}".format(dht_info))
-        print("DISTRIBUTED SERVICE INFO: If this is the first node of the swarm, you can copy the DHT INFO as the initial peer of following nodes")
-
         self.mp_deliver = MultiprocessingDeliver()
         self.mp_deliver.start()
+
+        node_ip = extract_ip()
+        self.ip = node_ip
+        if initial_peer is not None and initial_peer != '': 
+            info_dict = {'type' : 'node', 'ip' : f'{node_ip}:{port}', 'start_layer':start_layer, 'end_layer':end_layer}
+            requests.post(
+                f"{initial_peer}/join",
+                json=info_dict,
+            )
+        else:
+            info_dict = {'type' : 'head', 'ip' : f'{node_ip}:{port}', 'start_layer':start_layer, 'end_layer':end_layer}
+            requests.post(
+                f"localhost:{P.NODE_PORT}/join",
+                json=info_dict,
+            )
         
 
 
@@ -344,7 +373,14 @@ class MolinkMultiprocessingDistributedExecutor(MultiprocessingDistributedExecuto
                 # which uses a different asyncio loop.
                 self.pp_lock = asyncio.Lock()
 
-            grpc_metadata = self.pipeline_manager.pipeline_info
+            if self.use_dht:
+                grpc_metadata = self.pipeline_manager.pipeline_info
+            else:
+                response = requests.post(
+                        "localhost/grpc",
+                        json={},
+                    )
+                grpc_metadata = response
             if len(grpc_metadata) <= 0:
                 server_list_raw = []
             else:

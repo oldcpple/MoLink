@@ -24,7 +24,12 @@ class MolinkEngineArgs(AsyncEngineArgs):
             '--serving-layers',
             type=str,
             default='')
-
+        
+        parser.add_argument(
+            '--use-dht',
+            type=bool,
+            default=False)
+        
         return parser
     
     @classmethod
@@ -35,6 +40,8 @@ class MolinkEngineArgs(AsyncEngineArgs):
         engine_args = cls(**{attr: getattr(args, attr) for attr in attrs})
         engine_args.initial_peer = args.initial_peer
         engine_args.serving_layers = args.serving_layers
+        engine_args.use_dht = args.use_dht
+        engine_args.port = args.port
         return engine_args
     
     def create_engine_config(self,
