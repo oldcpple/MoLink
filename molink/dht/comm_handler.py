@@ -15,6 +15,7 @@ from .utils import decoding_execute_model_req, decoding_sampler_outputs
 from .dht import DHTNode
 from vllm.sequence import IntermediateTensors
 from molink.dht.proto import comm_pb2, comm_pb2_grpc
+import molink.distributed.parallel_state as P
 
 class CommService(comm_pb2_grpc.CommService):
 
@@ -91,20 +92,26 @@ class CommService(comm_pb2_grpc.CommService):
                 return comm_pb2.GrpcResponseData(res = 0)
 
             if can_push:
-                server_list = grpc_metadata.get('server_list')
+                if not P.IN_AUTODL:
+                    server_list = grpc_metadata.get('server_list')
 
-                idx_self = 0
-                this_ip = f'{self.bind_executor.ip}:{self.bind_executor.grpc_port}'
-                for server in server_list:
-                    if server == this_ip:
-                        break
-                    idx_self += 1
+                    idx_self = 0
+                    this_ip = f'{self.bind_executor.ip}:{self.bind_executor.grpc_port}'
+                    for server in server_list:
+                        if server == this_ip:
+                            break
+                        idx_self += 1
 
-                # there's no next server
-                if len(server_list) <= idx_self + 1:
-                    return
-                # ip : grpc_port
-                next_server = server_list[idx_self + 1]
+                    # there's no next server
+                    if len(server_list) <= idx_self + 1:
+                        return
+                    # ip : grpc_port
+                    next_server = server_list[idx_self + 1]
+                
+                else:
+                    # if we are in autoDL environment, the grpc server address should be 
+                    # mapped to localhost:38000, since no direct connection is allowed
+                    next_server = 'localhost:38000'
 
                 intermediate_tensors_cpu = {k: v.to('cpu') for k, v in pipeline_outputs.items()}
                 self.bind_executor.mp_deliver.process_queue.put_nowait((intermediate_tensors_cpu, execute_model_req, grpc_metadata, \
@@ -115,7 +122,10 @@ class CommService(comm_pb2_grpc.CommService):
             # push the result to the head server 
             # pipeline_outpus should be type of SamplerOutput
 
-            head_server = grpc_metadata.get('head')
+            if not P.IN_AUTODL:
+                head_server = grpc_metadata.get('head')
+            else :
+                head_server = 'localhost:38000'
             self.bind_executor.mp_deliver.process_queue.put_nowait((pipeline_outputs, execute_model_req, grpc_metadata, \
                             virtual_engine, head_server, 'head'))
             

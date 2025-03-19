@@ -30,6 +30,16 @@ class MolinkEngineArgs(AsyncEngineArgs):
             type=bool,
             default=False)
         
+        parser.add_argument(
+            '--in-autodl',
+            type=bool,
+            default=False)
+        
+        parser.add_argument(
+            '--autodl-worker-num',
+            type=int,
+            default=0)
+
         return parser
     
     @classmethod
@@ -42,6 +52,8 @@ class MolinkEngineArgs(AsyncEngineArgs):
         engine_args.serving_layers = args.serving_layers
         engine_args.use_dht = args.use_dht
         engine_args.port = args.port
+        engine_args.in_autodl = args.in_autodl
+        engine_args.autodl_worker_num = args.autodl_worker_num
         return engine_args
     
     def create_engine_config(self,
