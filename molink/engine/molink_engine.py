@@ -219,6 +219,7 @@ class MolinkEngine(AsyncLLMEngine):
         del kwargs['use_dht']
         del kwargs['port']
         del kwargs['in_autodl']
+        del kwargs['autodl_worker_num']
 
         super().__init__(*args, **kwargs)
     
