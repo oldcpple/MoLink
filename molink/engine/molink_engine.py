@@ -13,6 +13,7 @@ from vllm.sequence import ExecuteModelRequest
 from molink.config import MolinkConfig, PipelineConfig
 from molink.executor.mp_distributed_executor import MolinkMultiprocessingDistributedExecutor
 import molink.distributed.parallel_state as P
+import vllm.distributed.util as U
 import time
 class _MolinkEngine(_AsyncLLMEngine):
 
@@ -177,6 +178,7 @@ class MolinkEngine(AsyncLLMEngine):
     _engine_class: Type[_MolinkEngine] = _MolinkEngine
 
     def __init__(self, *args, **kwargs):
+
         config = kwargs.get('vllm_config')
         initial_peer = kwargs.get('initial_peer')
         serving_layers = kwargs.get('serving_layers')
@@ -206,6 +208,11 @@ class MolinkEngine(AsyncLLMEngine):
 
         _is_first_rank = serving_layers[0] == layers_range[0]
         _is_last_rank = serving_layers[1] == layers_range[1]
+
+        def get_pp_indices():
+            return (serving_layers[0], serving_layers[1] + 1)
+        
+        U.get_pp_indices = get_pp_indices
 
         config.__class__ = MolinkConfig
         pipeline_config = PipelineConfig(_is_first_rank, _is_last_rank, initial_peer = initial_peer, serving_layers = serving_layers)
