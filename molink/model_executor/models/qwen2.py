@@ -52,8 +52,8 @@ from vllm.model_executor.pooling_metadata import PoolingMetadata
 from vllm.model_executor.sampling_metadata import SamplingMetadata
 from vllm.sequence import IntermediateTensors, PoolerOutput
 
-from vllm.model_executor.models.interfaces.interfaces import SupportsLoRA, SupportsPP
-from vllm.model_executor.models.interfaces.utils import (AutoWeightsLoader, PPMissingLayer, WeightsMapper,
+from vllm.model_executor.models.interfaces import SupportsLoRA, SupportsPP
+from vllm.model_executor.models.utils import (AutoWeightsLoader, PPMissingLayer, WeightsMapper,
                     is_pp_missing_parameter,
                     make_empty_intermediate_tensors_factory,
                     maybe_prefix)
