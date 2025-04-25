@@ -4,3 +4,5 @@ grpcio-tools
 protobuf == 5.29.0
 kademlia
 requests
+accelerate
+autoawq
