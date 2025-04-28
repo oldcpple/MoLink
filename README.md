@@ -37,7 +37,7 @@ DISTRIBUTED SERVICE INFO: MoLink gRPC server works at 172.17.0.17:50051
 DISTRIBUTED SERVICE INFO: If this is the first node of the swarm, you can copy the DHT INFO as the initial peer of following nodes
 ```
 
-Simply copy the second line, namely address of the DHT server,  ***172.17.0.17:8468*** in this example, and use it as the ***initial_peer*** in the following command to start the second server:
+Simply copy the first line, namely address of the DHT server,  ***172.17.0.17:50051*** in this example, and use it as the ***initial_peer*** in the following command to start the second server:
 
 ```shell
 python -m molink.entrypoints.api_server --model meta-llama/Llama-2-70b-chat-hf --port 9090 --dtype=half --max_model_len 4096 --pipeline_parallel_size 2 --serving_layers 40,79 --initial_peer 172.17.0.15:50051
