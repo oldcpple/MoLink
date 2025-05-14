@@ -248,6 +248,7 @@ class MolinkMultiprocessingDistributedExecutor(MultiprocessingDistributedExecuto
         all_kwargs = []
         distributed_init_method = get_distributed_init_method(
             get_ip(), get_open_port())
+        self.vllm_config.parallel_config.distributed_executor_backend = 'mp'
         for i in range(world_size):
             local_rank = i
             rank = i
@@ -263,7 +264,8 @@ class MolinkMultiprocessingDistributedExecutor(MultiprocessingDistributedExecuto
         
         _is_first_rank = self.pipeline_config._is_first_rank
         _is_last_rank = self.pipeline_config._is_last_rank
-        self._run_workers("init_worker", all_kwargs)
+        a = self._run_workers("init_worker", all_kwargs)
+
         self._run_workers("init_device", _is_first_rank, _is_last_rank)
         self._run_workers("load_model",
                           max_concurrent_workers=self.parallel_config.
@@ -460,6 +462,10 @@ class MolinkMultiprocessingDistributedExecutor(MultiprocessingDistributedExecuto
         except Exception as e:
             print(f'Exception in executing_head_server: {e}')
             traceback.print_exc()
+
+    async def stop_remote_worker_execution_loop_async(self) -> None:
+        """Releases parallel workers from model loop."""
+        return
 
 async def call_stub(stub, trigger_request):
     return await stub.ExecutingWorkerStep(trigger_request)
