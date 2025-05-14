@@ -92,9 +92,13 @@ class CommService(comm_pb2_grpc.CommService):
                     tensors = torch.load(io.BytesIO(v), map_location='cuda')
                     temp.tensors.update({k: tensors})
                 return temp
-
-            # 使用默认线程池执行阻塞操作（约5行核心修改）
+            
             intermediate_tensors = await asyncio.to_thread(process_tensors, intermediate_tensors)
+
+            if self.bind_executor.parallel_worker_tasks is None:
+                # Start model execution loop running in the parallel workers
+                self.bind_executor.parallel_worker_tasks = asyncio.create_task(
+                    self.bind_executor._start_worker_execution_loop())
 
             async with self.pp_lock:
                 pipeline_outputs = await self.bind_executor.driver_exec_model(execute_model_req, intermediate_tensors)
