@@ -12,6 +12,7 @@ from vllm.outputs import PoolingRequestOutput, RequestOutput
 from vllm.sequence import ExecuteModelRequest
 from molink.config import MolinkConfig, PipelineConfig
 from molink.executor.mp_distributed_executor import MolinkMultiprocessingDistributedExecutor
+from .arg_utils import MolinkEngineArgs
 import molink.distributed.parallel_state as P
 import vllm.distributed.utils as U
 import time
@@ -238,7 +239,7 @@ class MolinkEngine(AsyncLLMEngine):
     @classmethod
     def from_engine_args(
         cls,
-        engine_args: AsyncEngineArgs,
+        engine_args: MolinkEngineArgs,
         engine_config: Optional[VllmConfig] = None,
         start_engine_loop: bool = True,
         usage_context: UsageContext = UsageContext.ENGINE_CONTEXT,
