@@ -8,7 +8,7 @@ MoLink (***Mo***del-***Link***) is a distributed LLM serving system, aiming to a
 
 ## Installation Guide
 
-MoLink is built on top of vLLM, and will manage to keep compatible with its latest version, currently we support vLLM v0.7.2. Please ensure that your server meets the requirements for running vLLM, refer to [this](https://docs.vllm.ai/en/latest/).
+MoLink is built on top of vLLM, and will manage to keep compatible with its latest version, currently we support vLLM **v0.8.5post1**. Please ensure that your server meets the requirements for running vLLM, refer to [this](https://docs.vllm.ai/en/latest/).
 
 you can install MoLink with the following steps:
 
@@ -16,7 +16,10 @@ you can install MoLink with the following steps:
 git clone https://github.com/oldcpple/MoLink.git
 cd MoLink
 pip install -e .
+pip install grpcio-tools==1.71.0 protobuf==5.29.0
 ```
+
+We need to perform additional processing for the installation of **grpcio-tools** and **protobuf**, because of the conflicts with vLLM dependencies.
 
 ## Usage Guide
 
@@ -49,6 +52,8 @@ You can also serve the LLM with a single node, in this case the system falls bac
 python -m molink.entrypoints.api_server --model meta-llama/Llama-2-70b-chat-hf --port 8080 --dtype=half --max_model_len 4096
 ```
 
+For multi-GPU nodes, you can use multiple GPUs for tensor-parallel by specifying argument **--tensor_parallel_size**. It's also supported to run on a hybrid pipeline, for example, the tensor parallelism size of each stage can be different, and devices can be heterogeneous.
+
 The inference service usage are also compatible with vLLM's api server, for example you can simply run (change localhost to your server IP if you're not running at local ):
 
 ```shell
@@ -68,6 +73,18 @@ python -m molink.entrypoints.openai.api_server --model XXXXX (same as examples a
 ```
 
 And access the API server like：
+
+```
+curl http://localhost:8080/v1/completions \
+    -H "Content-Type: application/json" \
+    -d '{
+        "prompt": "San Francisco is a",
+        "max_tokens": 20,
+        "temperature": 0
+    }'
+```
+
+or
 
 ```python
 from openai import OpenAI
@@ -110,3 +127,5 @@ print(completion.choices[0].message)
 - **QWenLMHeadModel**
 - **Qwen2MoeForCausalLM**
 - **Qwen2ForCausalLM**
+- **Qwen3MoeForCausalLM**
+- **Qwen3ForCausalLM**

@@ -23,10 +23,10 @@ from vllm.distributed import get_pp_group
 from vllm.sequence import IntermediateTensors, ExecuteModelRequest
 from molink.worker.worker_base import MolinkWorkerWrapperBase
 from molink.config import MolinkConfig
-from molink.dht.proto import comm_pb2, comm_pb2_grpc
-from molink.dht.comm_handler import CommService
-from molink.dht.dht import DHTNode, find_unbind_port, extract_ip
-from molink.dht.pipeline_manager import PipelineManager
+from molink.comm.proto import comm_pb2, comm_pb2_grpc
+from molink.comm.comm_handler import CommService
+from molink.comm.dht import DHTNode, find_unbind_port, extract_ip
+from molink.comm.pipeline_manager import PipelineManager
 import threading
 import queue
 from concurrent.futures import ThreadPoolExecutor
