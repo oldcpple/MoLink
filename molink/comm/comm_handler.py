@@ -14,7 +14,7 @@ from vllm.distributed import get_pp_group
 from .utils import decoding_execute_model_req, decoding_sampler_outputs
 from .dht import DHTNode
 from vllm.sequence import IntermediateTensors
-from molink.dht.proto import comm_pb2, comm_pb2_grpc
+from molink.comm.proto import comm_pb2, comm_pb2_grpc
 import molink.distributed.parallel_state as P
 
 class CommService(comm_pb2_grpc.CommService):
