@@ -1,4 +1,6 @@
 vllm == 0.8.5post1
+numpy==1.26.4
+openai==1.59.3
 grpcio
 grpcio-tools
 protobuf
