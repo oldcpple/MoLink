@@ -4,6 +4,7 @@ import argparse
 import dataclasses
 from vllm.engine.arg_utils import AsyncEngineArgs
 from vllm.utils import FlexibleArgumentParser, StoreBoolean
+from vllm.utils import FlexibleArgumentParser, GiB_bytes, is_in_ray_actor
 from vllm.usage.usage_lib import UsageContext
 import vllm.envs as envs
 from vllm.transformers_utils.utils import check_gguf_file
@@ -15,6 +16,7 @@ from vllm.config import (CacheConfig, CompilationConfig, ConfigFormat,
                          SchedulerConfig, SpeculativeConfig, TaskOption,
                          TokenizerPoolConfig, VllmConfig)
 from vllm.logger import init_logger
+from vllm import version
 from molink.config import MolinkConfig, PipelineConfig, MoLinkModelConfig
 
 logger = init_logger(__name__)
@@ -109,45 +111,54 @@ class MolinkEngineArgs(AsyncEngineArgs):
             model_impl=self.model_impl,
         )
 
-    def create_engine_config(self,
-                             usage_context: Optional[UsageContext] = None
-                             ) -> VllmConfig:
-        if envs.VLLM_USE_V1:
-            self._override_v1_engine_args(usage_context)
 
-        # gguf file needs a specific model loader and doesn't use hf_repo
-        if check_gguf_file(self.model):
-            self.quantization = self.load_format = "gguf"
+    def create_engine_config(
+        self,
+        usage_context: Optional[UsageContext] = None,
+    ) -> VllmConfig:
+        """
+        Create the VllmConfig.
 
-        # bitsandbytes quantization needs a specific model loader
-        # so we make sure the quant method and the load format are consistent
-        if (self.quantization == "bitsandbytes" or
-           self.qlora_adapter_name_or_path is not None) and \
-           self.load_format != "bitsandbytes":
-            raise ValueError(
-                "BitsAndBytes quantization and QLoRA adapter only support "
-                f"'bitsandbytes' load format, but got {self.load_format}")
+        NOTE: for autoselection of V0 vs V1 engine, we need to
+        create the ModelConfig first, since ModelConfig's attrs
+        (e.g. the model arch) are needed to make the decision.
 
-        if (self.load_format == "bitsandbytes" or
-            self.qlora_adapter_name_or_path is not None) and \
-            self.quantization != "bitsandbytes":
-            raise ValueError(
-                "BitsAndBytes load format and QLoRA adapter only support "
-                f"'bitsandbytes' quantization, but got {self.quantization}")
+        This function set VLLM_USE_V1=X if VLLM_USE_V1 is
+        unspecified by the user.
 
-        assert self.cpu_offload_gb >= 0, (
-            "CPU offload space must be non-negative"
-            f", but got {self.cpu_offload_gb}")
+        If VLLM_USE_V1 is specified by the user but the VllmConfig
+        is incompatible, we raise an error.
+        """
+        from vllm.platforms import current_platform
+        current_platform.pre_register_and_update()
 
         device_config = DeviceConfig(device=self.device)
         model_config = self.create_model_config()
 
-        if (model_config.is_multimodal_model and not envs.VLLM_USE_V1
-                and self.enable_prefix_caching):
-            logger.warning("--enable-prefix-caching is currently not "
-                           "supported for multimodal models in v0 and "
-                           "has been disabled.")
-            self.enable_prefix_caching = False
+        # * If VLLM_USE_V1 is unset, we enable V1 for "supported features"
+        #   and fall back to V0 for experimental or unsupported features.
+        # * If VLLM_USE_V1=1, we enable V1 for supported + experimental
+        #   features and raise error for unsupported features.
+        # * If VLLM_USE_V1=0, we disable V1.
+        use_v1 = False
+        try_v1 = envs.VLLM_USE_V1 or not envs.is_set("VLLM_USE_V1")
+        if try_v1 and self._is_v1_supported_oracle(model_config):
+            use_v1 = True
+
+        # If user explicitly set VLLM_USE_V1, sanity check we respect it.
+        if envs.is_set("VLLM_USE_V1"):
+            assert use_v1 == envs.VLLM_USE_V1
+        # Otherwise, set the VLLM_USE_V1 variable globally.
+        else:
+            envs.set_vllm_use_v1(use_v1)
+
+        # Set default arguments for V0 or V1 Engine.
+        if use_v1:
+            self._set_default_args_v1(usage_context)
+        else:
+            self._set_default_args_v0(model_config)
+
+        assert self.enable_chunked_prefill is not None
 
         cache_config = CacheConfig(
             block_size=self.block_size,
@@ -158,94 +169,41 @@ class MolinkEngineArgs(AsyncEngineArgs):
             num_gpu_blocks_override=self.num_gpu_blocks_override,
             sliding_window=model_config.get_sliding_window(),
             enable_prefix_caching=self.enable_prefix_caching,
+            prefix_caching_hash_algo=self.prefix_caching_hash_algo,
             cpu_offload_gb=self.cpu_offload_gb,
             calculate_kv_scales=self.calculate_kv_scales,
         )
+
+        # Get the current placement group if Ray is initialized and
+        # we are in a Ray actor. If so, then the placement group will be
+        # passed to spawned processes.
+        placement_group = None
+        if is_in_ray_actor():
+            import ray
+
+            # This call initializes Ray automatically if it is not initialized,
+            # but we should not do this here.
+            placement_group = ray.util.get_current_placement_group()
+
         parallel_config = ParallelConfig(
             pipeline_parallel_size=self.pipeline_parallel_size,
             tensor_parallel_size=self.tensor_parallel_size,
+            data_parallel_size=self.data_parallel_size,
+            enable_expert_parallel=self.enable_expert_parallel,
             max_parallel_loading_workers=self.max_parallel_loading_workers,
             disable_custom_all_reduce=self.disable_custom_all_reduce,
-            tokenizer_pool_config=TokenizerPoolConfig.create_config(
-                self.tokenizer_pool_size,
-                self.tokenizer_pool_type,
-                self.tokenizer_pool_extra_config,
-            ),
             ray_workers_use_nsight=self.ray_workers_use_nsight,
+            placement_group=placement_group,
             distributed_executor_backend=self.distributed_executor_backend,
             worker_cls=self.worker_cls,
+            worker_extension_cls=self.worker_extension_cls,
         )
 
-        max_model_len = model_config.max_model_len
-        use_long_context = max_model_len > 32768
-        if self.enable_chunked_prefill is None:
-            # If not explicitly set, enable chunked prefill by default for
-            # long context (> 32K) models. This is to avoid OOM errors in the
-            # initial memory profiling phase.
-
-            # For multimodal models, chunked prefill is disabled by default in
-            # V0, but enabled by design in V1
-            if model_config.is_multimodal_model:
-                self.enable_chunked_prefill = bool(envs.VLLM_USE_V1)
-
-            elif use_long_context:
-                is_gpu = device_config.device_type == "cuda"
-                use_sliding_window = (model_config.get_sliding_window()
-                                      is not None)
-                use_spec_decode = self.speculative_model is not None
-                from vllm.platforms import current_platform
-                if (is_gpu and not use_sliding_window and not use_spec_decode
-                        and not self.enable_lora
-                        and not self.enable_prompt_adapter
-                        and model_config.runner_type != "pooling"
-                        and not current_platform.is_rocm()):
-                    self.enable_chunked_prefill = True
-                    logger.warning(
-                        "Chunked prefill is enabled by default for models with "
-                        "max_model_len > 32K. Currently, chunked prefill might "
-                        "not work with some features or models. If you "
-                        "encounter any issues, please disable chunked prefill "
-                        "by setting --enable-chunked-prefill=False.")
-            if self.enable_chunked_prefill is None:
-                self.enable_chunked_prefill = False
-
-        if not self.enable_chunked_prefill and use_long_context:
-            logger.warning(
-                "The model has a long context length (%s). This may cause OOM "
-                "errors during the initial memory profiling phase, or result "
-                "in low performance due to small KV cache space. Consider "
-                "setting --max-model-len to a smaller value.", max_model_len)
-        elif (self.enable_chunked_prefill
-              and model_config.runner_type == "pooling"):
-            msg = "Chunked prefill is not supported for pooling models"
-            raise ValueError(msg)
-
-
-        speculative_config = SpeculativeConfig.maybe_create_spec_config(
+        speculative_config = self.create_speculative_config(
             target_model_config=model_config,
             target_parallel_config=parallel_config,
-            target_dtype=self.dtype,
-            speculative_model=self.speculative_model,
-            speculative_model_quantization = \
-                self.speculative_model_quantization,
-            speculative_draft_tensor_parallel_size = \
-                self.speculative_draft_tensor_parallel_size,
-            num_speculative_tokens=self.num_speculative_tokens,
-            speculative_disable_mqa_scorer=self.speculative_disable_mqa_scorer,
-            speculative_disable_by_batch_size=self.
-            speculative_disable_by_batch_size,
-            speculative_max_model_len=self.speculative_max_model_len,
             enable_chunked_prefill=self.enable_chunked_prefill,
             disable_log_stats=self.disable_log_stats,
-            ngram_prompt_lookup_max=self.ngram_prompt_lookup_max,
-            ngram_prompt_lookup_min=self.ngram_prompt_lookup_min,
-            draft_token_acceptance_method=\
-                self.spec_decoding_acceptance_method,
-            typical_acceptance_sampler_posterior_threshold=self.
-            typical_acceptance_sampler_posterior_threshold,
-            typical_acceptance_sampler_posterior_alpha=self.
-            typical_acceptance_sampler_posterior_alpha,
-            disable_logprobs=self.disable_logprobs_during_spec_decoding,
         )
 
         # Reminder: Please update docs/source/features/compatibility_matrix.md
@@ -272,16 +230,6 @@ class MolinkEngineArgs(AsyncEngineArgs):
             if speculative_config is None \
             else speculative_config.num_lookahead_slots
 
-        if not self.use_v2_block_manager:
-            logger.warning(
-                "[DEPRECATED] Block manager v1 has been removed, "
-                "and setting --use-v2-block-manager to True or False has "
-                "no effect on vLLM behavior. Please remove "
-                "--use-v2-block-manager in your engine argument. "
-                "If your use case is not supported by "
-                "SelfAttnBlockSpaceManager (i.e. block manager v2),"
-                " please file an issue with detailed information.")
-
         scheduler_config = SchedulerConfig(
             runner_type=model_config.runner_type,
             max_num_batched_tokens=self.max_num_batched_tokens,
@@ -290,13 +238,20 @@ class MolinkEngineArgs(AsyncEngineArgs):
             num_lookahead_slots=num_lookahead_slots,
             delay_factor=self.scheduler_delay_factor,
             enable_chunked_prefill=self.enable_chunked_prefill,
+            disable_chunked_mm_input=self.disable_chunked_mm_input,
             is_multimodal_model=model_config.is_multimodal_model,
             preemption_mode=self.preemption_mode,
             num_scheduler_steps=self.num_scheduler_steps,
             multi_step_stream_outputs=self.multi_step_stream_outputs,
             send_delta_data=(envs.VLLM_USE_RAY_SPMD_WORKER
                              and parallel_config.use_ray),
-            policy=self.scheduling_policy)
+            policy=self.scheduling_policy,
+            scheduler_cls=self.scheduler_cls,
+            max_num_partial_prefills=self.max_num_partial_prefills,
+            max_long_partial_prefills=self.max_long_partial_prefills,
+            long_prefill_token_threshold=self.long_prefill_token_threshold,
+        )
+
         lora_config = LoRAConfig(
             bias_enabled=self.enable_lora_bias,
             max_lora_rank=self.max_lora_rank,
@@ -310,10 +265,12 @@ class MolinkEngineArgs(AsyncEngineArgs):
 
         if self.qlora_adapter_name_or_path is not None and \
             self.qlora_adapter_name_or_path != "":
-            if self.model_loader_extra_config is None:
-                self.model_loader_extra_config = {}
             self.model_loader_extra_config[
                 "qlora_adapter_name_or_path"] = self.qlora_adapter_name_or_path
+
+        # bitsandbytes pre-quantized model need a specific model loader
+        if model_config.quantization == "bitsandbytes":
+            self.quantization = self.load_format = "bitsandbytes"
 
         load_config = self.create_load_config()
 
@@ -323,7 +280,15 @@ class MolinkEngineArgs(AsyncEngineArgs):
                                         if self.enable_prompt_adapter else None
 
         decoding_config = DecodingConfig(
-            guided_decoding_backend=self.guided_decoding_backend)
+            guided_decoding_backend=self.guided_decoding_backend,
+            reasoning_backend=self.reasoning_parser
+            if self.enable_reasoning else None,
+        )
+
+        show_hidden_metrics = False
+        if self.show_hidden_metrics_for_version is not None:
+            show_hidden_metrics = version._prev_minor_version_was(
+                self.show_hidden_metrics_for_version)
 
         detailed_trace_modules = []
         if self.collect_detailed_traces is not None:
@@ -334,6 +299,7 @@ class MolinkEngineArgs(AsyncEngineArgs):
                     f"Invalid module {m} in collect_detailed_traces. "
                     f"Valid modules are {ALLOWED_DETAILED_TRACE_MODULES}")
         observability_config = ObservabilityConfig(
+            show_hidden_metrics=show_hidden_metrics,
             otlp_traces_endpoint=self.otlp_traces_endpoint,
             collect_model_forward_time="model" in detailed_trace_modules
             or "all" in detailed_trace_modules,
@@ -355,8 +321,7 @@ class MolinkEngineArgs(AsyncEngineArgs):
             prompt_adapter_config=prompt_adapter_config,
             compilation_config=self.compilation_config,
             kv_transfer_config=self.kv_transfer_config,
+            additional_config=self.additional_config,
         )
 
-        if envs.VLLM_USE_V1:
-            self._override_v1_engine_config(config)
         return config
