@@ -53,7 +53,7 @@ def decoding_sampler_outputs(msgspec_sampelr_outputs):
         deferred_sample_results_args=deferred_sample_results_args)
 
 def decoding_execute_model_req(msgspec_emq):
-    assert len(msgspec_emq) == 12, 'Wrong length of ExecuteModelRequest'
+    assert len(msgspec_emq) == 13, 'Wrong length of ExecuteModelRequest'
 
     seq_group_metadata_list_raw = msgspec_emq[0]
     blocks_to_swap_in = msgspec_emq[1]
@@ -64,9 +64,10 @@ def decoding_execute_model_req(msgspec_emq):
     running_queue_size = msgspec_emq[6]
     previous_hidden_states = msgspec_emq[7]
     num_steps = msgspec_emq[8]
-    finished_requests_ids = msgspec_emq[9]
-    last_sampled_token_ids = msgspec_emq[10]
-    async_callback = msgspec_emq[11]
+    spec_step_idx = msgspec_emq[9]
+    finished_requests_ids = msgspec_emq[10]
+    last_sampled_token_ids = msgspec_emq[11]
+    async_callback = msgspec_emq[12]
 
     seq_group_metadata_list: List[Union[SequenceGroupMetadata]] = []
     for raw_metadata in seq_group_metadata_list_raw:
@@ -124,15 +125,17 @@ def decoding_execute_model_req(msgspec_emq):
             sampling_params=sampling_params,
             block_tables=block_tables,
             do_sample=raw_metadata[6],
-            token_chunk_size=raw_metadata[7],
+            pooling_params=raw_metadata[7],
             lora_request=raw_metadata[8],
             computed_block_nums=raw_metadata[9],
             state=state,
             multi_modal_data=raw_metadata[11],
-            mm_processor_kwargs=raw_metadata[12],
+            multi_modal_placeholders=raw_metadata[12],
             encoder_seq_data=raw_metadata[13],
             cross_block_table=raw_metadata[14],
-            prompt_adapter_request=raw_metadata[15]
+            prompt_adapter_request=raw_metadata[15],
+            token_chunk_size=raw_metadata[16],
+            num_speculative_tokens=raw_metadata[17]
         ))
 
     return ExecuteModelRequest(
@@ -145,6 +148,7 @@ def decoding_execute_model_req(msgspec_emq):
         running_queue_size=running_queue_size,
         previous_hidden_states=previous_hidden_states,
         num_steps=num_steps,
+        spec_step_idx = spec_step_idx,
         finished_requests_ids=finished_requests_ids,
         last_sampled_token_ids=last_sampled_token_ids,
         async_callback=async_callback

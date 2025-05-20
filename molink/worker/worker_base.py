@@ -25,3 +25,6 @@ class MolinkWorkerWrapperBase(WorkerWrapperBase):
             # To make vLLM config available during worker initialization
             self.worker = MolinkWorker(**kwargs)
             assert self.worker is not None
+
+    def init_device(self, _is_first_rank: bool, _is_last_rank: bool) -> None:
+        self.worker.init_device(_is_first_rank, _is_last_rank)

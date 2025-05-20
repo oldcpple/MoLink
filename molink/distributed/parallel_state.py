@@ -27,26 +27,17 @@ class MolinkGroupCoordinator(GroupCoordinator):
         group_ranks: List[List[int]],
         local_rank: int,
         torch_distributed_backend: Union[str, Backend],
-        use_pynccl: bool,
-        use_custom_allreduce: bool,
-        use_tpu_communicator: bool,
-        use_hpu_communicator: bool,
-        use_xpu_communicator: bool,
+        use_device_communicator: bool,
         use_message_queue_broadcaster: bool = False,
         group_name: Optional[str] = None,):
 
         super().__init__(
-        group_ranks=group_ranks,
-        local_rank=local_rank,
-        torch_distributed_backend=torch_distributed_backend,
-        use_pynccl=use_pynccl,
-        use_custom_allreduce=use_custom_allreduce
-        and use_custom_allreduce,
-        use_tpu_communicator=use_tpu_communicator,
-        use_hpu_communicator=use_hpu_communicator,
-        use_xpu_communicator=use_xpu_communicator,
-        use_message_queue_broadcaster=use_message_queue_broadcaster,
-        group_name=group_name,)
+                    group_ranks,
+                    local_rank,
+                    torch_distributed_backend,
+                    use_device_communicator,
+                    use_message_queue_broadcaster,
+                    group_name,)
 
         self._is_first_rank = _is_first_rank
         self._is_last_rank = _is_last_rank
@@ -65,25 +56,16 @@ def init_model_parallel_group_PP(
     group_ranks: List[List[int]],
     local_rank: int,
     backend: str,
-    use_custom_allreduce: Optional[bool] = None,
     use_message_queue_broadcaster: bool = False,
     group_name: Optional[str] = None,
 ) -> MolinkGroupCoordinator:
-    if use_custom_allreduce is None:
-        use_custom_allreduce = _ENABLE_CUSTOM_ALL_REDUCE
-    from vllm.platforms import current_platform
     return MolinkGroupCoordinator(
         _is_first_rank = _is_first_rank,
         _is_last_rank = _is_last_rank,
         group_ranks=group_ranks,
         local_rank=local_rank,
         torch_distributed_backend=backend,
-        use_pynccl=current_platform.is_cuda_alike(),
-        use_custom_allreduce=current_platform.is_cuda_alike()
-        and use_custom_allreduce,
-        use_tpu_communicator=True,
-        use_hpu_communicator=True,
-        use_xpu_communicator=True,
+        use_device_communicator=True,
         use_message_queue_broadcaster=use_message_queue_broadcaster,
         group_name=group_name,
     )
@@ -142,8 +124,14 @@ def initialize_model_parallel(
                                     group_ranks,
                                     get_world_group().local_rank,
                                     backend,
-                                    use_custom_allreduce=False,
                                     group_name="pp")
+
+    assert P._DP is None, ("data parallel group is already initialized")
+
+    P._DP = init_model_parallel_group(group_ranks,
+                                    get_world_group().local_rank,
+                                    backend,
+                                    group_name="dp")
 
 
 def ensure_model_parallel_initialized(
