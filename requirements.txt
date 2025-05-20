@@ -1,7 +1,7 @@
 vllm == 0.8.5post1
 grpcio
 grpcio-tools
-protobuf == 5.29.0
+protobuf
 kademlia
 requests
 accelerate
