@@ -82,7 +82,7 @@ class MolinkDefaultModelLoader(DefaultModelLoader):
 
             weights_to_load = {name for name, _ in model.named_parameters()}
             loaded_weights = model.load_weights(
-                self._get_all_weights(model_config, model))
+                self.get_all_weights(model_config, model))
             # We only enable strict check for non-quantized models
             # that have loaded weights tracking currently.
             if model_config.quantization is None and loaded_weights is not None:

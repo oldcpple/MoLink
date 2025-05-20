@@ -192,8 +192,9 @@ class MolinkEngine(AsyncLLMEngine):
         P.IN_AUTODL = in_autodl
         P.AUTODL_WORKER_NUM = autodl_worker_num
         base_port = 38000
-        for i in range(autodl_worker_num):
-            P.AUTODL_SERVER_IP_MAP.append(f'localhost:{base_port + i}')
+        if autodl_worker_num is not None:
+            for i in range(autodl_worker_num):
+                P.AUTODL_SERVER_IP_MAP.append(f'localhost:{base_port + i}')
 
         model_config = config.model_config
         num_all_layers = model_config.hf_config.num_hidden_layers
@@ -269,3 +270,32 @@ class MolinkEngine(AsyncLLMEngine):
             autodl_worker_num = engine_args.autodl_worker_num,
         )
         return engine
+    
+    @classmethod
+    def from_vllm_config(
+        cls,
+        vllm_config: VllmConfig,
+        start_engine_loop: bool = True,
+        usage_context: UsageContext = UsageContext.ENGINE_CONTEXT,
+        stat_loggers: Optional[dict[str, StatLoggerBase]] = None,
+        disable_log_requests: bool = False,
+        disable_log_stats: bool = False,
+        engine_args = None,
+    ) -> "AsyncLLMEngine":
+        """Create an AsyncLLMEngine from the EngineArgs."""
+
+        return cls(
+            vllm_config=vllm_config,
+            executor_class=cls._get_executor_cls(vllm_config),
+            start_engine_loop=start_engine_loop,
+            log_requests=not disable_log_requests,
+            log_stats=not disable_log_stats,
+            usage_context=usage_context,
+            stat_loggers=stat_loggers,
+            initial_peer = engine_args.initial_peer,
+            serving_layers = engine_args.serving_layers,
+            use_dht = engine_args.use_dht,
+            port = engine_args.port,
+            in_autodl = engine_args.in_autodl,
+            autodl_worker_num = engine_args.autodl_worker_num,
+        )
