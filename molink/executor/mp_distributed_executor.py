@@ -80,6 +80,9 @@ class MultiprocessingDeliver(mp.Process):
             )
         
         execute_model_req.async_callback = None
+        for seq_group in execute_model_req.seq_group_metadata_list:
+            seq_group.multi_modal_data = None
+            seq_group.multi_modal_placeholders = None
 
         emq = msgspec.json.encode(execute_model_req)
         
@@ -264,8 +267,7 @@ class MolinkMultiprocessingDistributedExecutor(MultiprocessingDistributedExecuto
         
         _is_first_rank = self.pipeline_config._is_first_rank
         _is_last_rank = self.pipeline_config._is_last_rank
-        a = self._run_workers("init_worker", all_kwargs)
-
+        self._run_workers("init_worker", all_kwargs)
         self._run_workers("init_device", _is_first_rank, _is_last_rank)
         self._run_workers("load_model",
                           max_concurrent_workers=self.parallel_config.

@@ -4,13 +4,14 @@ from typing import Dict, List, Optional, Set, Tuple, Type, Union
 import time
 import torch
 import traceback
+import dataclasses
 import torch.distributed
 from vllm.worker.worker import Worker, _check_if_gpu_supports_dtype
 import vllm.envs as envs
 from vllm.config import VllmConfig
 from vllm.model_executor import set_random_seed
-from vllm.distributed import (ensure_kv_transfer_initialized,
-                              init_distributed_environment,
+from vllm.distributed.kv_transfer import ensure_kv_transfer_initialized
+from vllm.distributed import (init_distributed_environment,
                               set_custom_all_reduce,
                               get_pp_group)
 from vllm.utils import (GiB_bytes, MemorySnapshot, bind_kv_cache,
@@ -94,66 +95,60 @@ class MolinkWorker(Worker):
         self,
         execute_model_req: Optional[ExecuteModelRequest] = None,
         intermediate_tensors: Optional[IntermediateTensors] = None,
-    ):
+    ) -> Optional[List[SamplerOutput]]:
         """Executes at least one model step on the given sequences, unless no
         sequences are provided."""
+        start_time = time.perf_counter()
 
-        try:
-            start_time = time.perf_counter()
-            inputs = self.prepare_input(execute_model_req, intermediate_tensors)
-            if inputs is None:
-                return None
+        inputs = self.prepare_input(execute_model_req, intermediate_tensors)
+        if inputs is None:
+            return None
 
-            model_input, worker_input, kwargs, intermediate_tensors = inputs
-            num_steps = worker_input.num_steps
+        model_input, worker_input, kwargs, intermediate_tensors = inputs
+        num_steps = worker_input.num_steps
+        if (execute_model_req is not None and execute_model_req.spec_step_idx):
+            kwargs["spec_step_idx"] = execute_model_req.spec_step_idx
 
-            # not surpported in vLLM v0.7.2
-            '''
-            if (execute_model_req is not None and execute_model_req.spec_step_idx):
-                kwargs["spec_step_idx"] = execute_model_req.spec_step_idx
-            '''
-            self.execute_worker(worker_input)
-            # If there is no input, we don't need to execute the model.
-            if worker_input.num_seq_groups == 0:
-                return []
+        self.execute_worker(worker_input)
 
-            orig_model_execute_time = 0.0
-            if not get_pp_group().is_first_rank:
-                if (self.observability_config is not None
-                        and self.observability_config.collect_model_execute_time):
-                    orig_model_execute_time = intermediate_tensors.tensors.get(
-                        "model_execute_time", torch.tensor(0)).item()
-            output = self.model_runner.execute_model(
-                model_input=model_input,
-                kv_caches=self.kv_cache[worker_input.virtual_engine]
-                if self.kv_cache is not None else None,
-                intermediate_tensors=intermediate_tensors,
-                num_steps=num_steps,
-                **kwargs,
-            )
-            model_execute_time = time.perf_counter() - start_time
-            if not get_pp_group().is_last_rank:
-                # output is IntermediateTensors
-                assert isinstance(output, IntermediateTensors)
-                if (self.observability_config is not None
-                        and self.observability_config.collect_model_execute_time):
-                    output.tensors["model_execute_time"] = torch.tensor(
-                        model_execute_time + orig_model_execute_time)
-                    
-                return [output.tensors]
+        # If there is no input, we don't need to execute the model.
+        if worker_input.num_seq_groups == 0:
+            return []
+
+        orig_model_execute_time = 0.0
+        if not get_pp_group().is_first_rank:
             if (self.observability_config is not None
-                    and self.observability_config.collect_model_execute_time
-                    and output is not None):
-                for o in output:
-                    o.model_execute_time = (orig_model_execute_time +
-                                            model_execute_time)
+                    and self.observability_config.collect_model_execute_time):
+                orig_model_execute_time = intermediate_tensors.tensors.get(
+                    "model_execute_time", torch.tensor(0)).item()
 
-            # output is List[SamplerOutput]
-            return output
-        
-        except Exception as e:
-            print(e)
-            traceback.print_exc()
+        output = self.model_runner.execute_model(
+            model_input=model_input,
+            kv_caches=self.kv_cache[worker_input.virtual_engine]
+            if self.kv_cache is not None else None,
+            intermediate_tensors=intermediate_tensors,
+            num_steps=num_steps,
+            **kwargs,
+        )
+
+        model_execute_time = time.perf_counter() - start_time
+        if not get_pp_group().is_last_rank:
+            # output is IntermediateTensors
+            assert isinstance(output, IntermediateTensors)
+            if (self.observability_config is not None
+                    and self.observability_config.collect_model_execute_time):
+                output.tensors["model_execute_time"] = torch.tensor(
+                    model_execute_time + orig_model_execute_time)
+            return [output.tensors]
+        if (self.observability_config is not None
+                and self.observability_config.collect_model_execute_time
+                and output is not None):
+            for o in output:
+                o.model_execute_time = (orig_model_execute_time +
+                                        model_execute_time)
+
+        # output is List[SamplerOutput]
+        return output
     
     def prepare_input(
         self,
