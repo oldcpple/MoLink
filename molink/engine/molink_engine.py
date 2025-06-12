@@ -210,11 +210,8 @@ class MolinkEngine(AsyncLLMEngine):
 
         _is_first_rank = serving_layers[0] == layers_range[0]
         _is_last_rank = serving_layers[1] == layers_range[1]
-
-        def get_pp_indices(a, b, c):
-            return (serving_layers[0], serving_layers[1] + 1)
         
-        U.get_pp_indices = get_pp_indices
+        patch_get_pp_indices(serving_layers[0], serving_layers[1] + 1)
 
         config.__class__ = MolinkConfig
         pipeline_config = PipelineConfig(_is_first_rank, _is_last_rank, initial_peer = initial_peer, serving_layers = serving_layers)
@@ -299,3 +296,49 @@ class MolinkEngine(AsyncLLMEngine):
             in_autodl = engine_args.in_autodl,
             autodl_worker_num = engine_args.autodl_worker_num,
         )
+
+
+def patch_get_pp_indices(start: int, end: int):
+    import vllm
+    import os
+    import re
+
+    vllm_path = os.path.dirname(vllm.__file__)
+    utils_path = os.path.join(vllm_path, 'distributed', 'utils.py')
+
+    with open(utils_path, 'r') as f:
+        lines = f.readlines()
+
+    start_idx = None
+    for i, line in enumerate(lines):
+        if re.match(r"\s*def\s+get_pp_indices\s*\(", line):
+            start_idx = i
+            break
+
+    if start_idx is None:
+        print("get_pp_indices not found in utils.py")
+        return
+
+    indent = re.match(r"(\s*)def", lines[start_idx]).group(1)
+
+    end_idx = start_idx + 1
+    while end_idx < len(lines):
+        line = lines[end_idx]
+        if line.strip() == "":
+            end_idx += 1
+            continue
+        if not line.startswith(indent + " "): 
+            break
+        end_idx += 1
+
+    new_func = [
+        f"{indent}def get_pp_indices(a, b, c):\n",
+        f"{indent}    return ({start}, {end})\n"
+    ]
+
+    lines[start_idx:end_idx] = new_func
+
+    with open(utils_path, 'w') as f:
+        f.writelines(lines)
+
+    print(f"get_pp_indices patched to return ({start}, {end}) in {utils_path}")
