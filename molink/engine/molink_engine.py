@@ -210,6 +210,11 @@ class MolinkEngine(AsyncLLMEngine):
 
         _is_first_rank = serving_layers[0] == layers_range[0]
         _is_last_rank = serving_layers[1] == layers_range[1]
+
+        def get_pp_indices(a, b, c):
+            return (serving_layers[0], serving_layers[1] + 1)
+        
+        U.get_pp_indices = get_pp_indices
         
         patch_get_pp_indices(serving_layers[0], serving_layers[1] + 1)
 
