@@ -73,6 +73,7 @@ class _MolinkEngine(_AsyncLLMEngine):
             self.async_callbacks = []
 
         self.profile_data = {'prefill' : {}, 'decode' : {}}
+        self.prerun_profile()
 
     async def step_async(
         self, virtual_engine: int, ctx_idx: int
@@ -390,6 +391,9 @@ class MolinkEngine(AsyncLLMEngine):
 
         model_config = config.model_config
         num_all_layers = model_config.hf_config.num_hidden_layers
+        self.model_hidden_size = model_config.hf_config.hiddensize
+        self.model_type_size = 8
+
         layers_range = [0, num_all_layers - 1]
 
         if serving_layers is None or serving_layers == '' or len(serving_layers) <= 0:
@@ -618,5 +622,50 @@ class MolinkEngine(AsyncLLMEngine):
 
         return not all_finished
     
+    def culculate_compute_latency(self, num_batched_token, batch_size):
+        #decode
+        left = -1
+        right = -1
+
+        keys = sorted(self.engine.profile_data['decode'].keys())
+
+        if batch_size == 1:
+            return self.engine.profile_data['decode'].get(1)
+
+        for i in range(0, len(keys) - 1):
+            if keys[i] <= batch_size and keys[i + 1] >= batch_size:
+                left = keys[i]
+                right = keys[i + 1]
+                break
+        left_latency = self.engine.profile_data['decode'].get(left)
+        right_latency = self.engine.profile_data['decode'].get(right)
+
+        return left_latency + (right_latency - left_latency) * ((batch_size - left) / (right - left))
+    
+
+    def culculate_transmission_latency(self, num_batched_token, batch_size):
+        # Mbps
+        bandwidth = 1000
+        # ms
+        latency = 20
+        # bit
+        batch_data_size = self.model_type_size * self.model_hidden_size * num_batched_token * batch_size
+        # ms
+        return (batch_data_size / 1e6) / (bandwidth * 1e6) + latency 
+    
     def culculate_batch_num(self): 
-        return random.choice([2,3,4])
+        # equal to pipeline size
+        base_batch_num = 2
+        num_requests = len(self.engine.scheduler.waiting) + len(self.engine.scheduler.running)
+        if num_requests == 1:
+            return 1
+        if num_requests <= base_batch_num:
+            return base_batch_num
+        for batch_num in range(base_batch_num + 1, self.engine.max_batch_num + 1):
+            single_batch_size = num_requests / batch_num
+            single_compute_latency = self.culculate_compute_latency(1, single_batch_size)
+            single_transmission_latency = self.culculate_transmission_latency(1, single_batch_size)
+            bubble = (base_batch_num) * single_transmission_latency
+            if (batch_num - base_batch_num) * single_compute_latency >= bubble:
+                return batch_num 
+        return self.engine.max_batch_num
