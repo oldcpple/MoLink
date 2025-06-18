@@ -196,6 +196,7 @@ class MolinkMultiprocessingDistributedExecutor(MultiprocessingDistributedExecuto
         self.preset_server_list = []
         self.stub_list = []
         self.use_dht = False
+        self.max_batch_num = 10
 
         self._init_executor()
 
@@ -282,7 +283,7 @@ class MolinkMultiprocessingDistributedExecutor(MultiprocessingDistributedExecuto
 
 
 
-        self.comm_handler = CommService(self.parallel_config.pipeline_parallel_size, self)
+        self.comm_handler = CommService(self.max_batch_num, self)
         self.grpc_server = aio.server(futures.ThreadPoolExecutor(max_workers=10),
                                             options=[
                                                 ('grpc.max_send_message_length', 200 * 1024 * 1024),  # 200MB
