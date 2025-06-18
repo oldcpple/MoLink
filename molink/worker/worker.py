@@ -124,7 +124,7 @@ class MolinkWorker(Worker):
 
         output = self.model_runner.execute_model(
             model_input=model_input,
-            kv_caches=self.kv_cache[worker_input.virtual_engine]
+            kv_caches=self.kv_cache[0]
             if self.kv_cache is not None else None,
             intermediate_tensors=intermediate_tensors,
             num_steps=num_steps,
@@ -185,7 +185,7 @@ class MolinkWorker(Worker):
         model_input: ModelRunnerInputBase = (
             self.model_runner.prepare_model_input(
                 execute_model_req.seq_group_metadata_list,
-                execute_model_req.virtual_engine,
+                0,
                 execute_model_req.finished_requests_ids))
 
         kwargs = extract_previous_hidden_states(execute_model_req)
