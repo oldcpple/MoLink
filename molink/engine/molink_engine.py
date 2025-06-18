@@ -283,7 +283,7 @@ class _MolinkEngine(_AsyncLLMEngine):
         decode_batch_size_list = [1, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
 
         sampling_params = \
-                SamplingParams(top_p=0.99, top_k=self.vocab_size - 1)
+                SamplingParams(top_p=0.99)
         first_layer, last_layer = U.get_pp_indices(1, 1, 1)
         last_layer -= 1
         num_layers = last_layer - first_layer
@@ -293,26 +293,26 @@ class _MolinkEngine(_AsyncLLMEngine):
         for batched_token_num in prefill_batched_token_list:
             seqs: List[SequenceGroupMetadata] = []
             seq_len = batched_token_num
-            dummy_data = self.input_registry \
-                .dummy_data_for_profiling(self.model_config,
+            dummy_data = self.model_executor.driver_worker.model_runner.input_registry \
+                .dummy_data_for_profiling(self.model_executor.driver_worker.model_runner.model_config,
                                             seq_len,
-                                            self.mm_registry)
+                                            self.model_executor.driver_worker.model_runner.mm_registry)
             seq = SequenceGroupMetadata(
-                request_id=str(group_id),
-                is_prompt=False,
-                seq_data={group_id: dummy_data.seq_data},
+                request_id=str(1),
+                is_prompt=True,
+                seq_data={1: dummy_data.seq_data},
                 sampling_params=sampling_params,
                 block_tables=None,
             )
             seqs.append(seq)
             kv_caches = [
-                torch.tensor([], dtype=torch.float32, device=self.device)
+                torch.tensor([], dtype=torch.float32, device=self.model_executor.driver_worker.model_runner.device)
                 for _ in range(num_layers)
             ]
-            model_input = self.prepare_model_input(seqs)
+            model_input = self.model_executor.driver_worker.model_runner.prepare_model_input(seqs)
 
             ts = time.time()
-            self.execute_model(model_input, kv_caches)
+            self.model_executor.driver_worker.model_runner.execute_model(model_input, kv_caches)
             torch.cuda.synchronize()
             te = time.time()
             # in ms
@@ -332,10 +332,10 @@ class _MolinkEngine(_AsyncLLMEngine):
             ctn = 0
             for group_id in range(batch_size):
                 seq_len = 1
-                dummy_data = self.input_registry \
-                    .dummy_data_for_profiling(self.model_config,
+                dummy_data = self.model_executor.driver_worker.model_runner.input_registry \
+                    .dummy_data_for_profiling(self.model_executor.driver_worker.model_runner.model_config,
                                               seq_len,
-                                              self.mm_registry)
+                                              self.model_executor.driver_worker.model_runner.mm_registry)
 
                 seq = SequenceGroupMetadata(
                     request_id=str(ctn),
@@ -347,23 +347,23 @@ class _MolinkEngine(_AsyncLLMEngine):
                 seqs.append(seq)
             ctn += 1
             kv_caches = [
-                torch.tensor([], dtype=torch.float32, device=self.device)
+                torch.tensor([], dtype=torch.float32, device=self.model_executor.driver_worker.model_runner.device)
                 for _ in range(num_layers)
             ]
-            model_input = self.prepare_model_input(seqs)
+            model_input = self.model_executor.driver_worker.model_runner.prepare_model_input(seqs)
 
             ts = time.time()
-            self.execute_model(model_input, kv_caches)
+            self.model_executor.driver_worker.model_runner.execute_model(model_input, kv_caches)
             torch.cuda.synchronize()
             te = time.time()
             # in ms
             profiled_latency = (te - ts) * 1000
-            prefill_table = self.profile_data.get('decode')
-            prefill_table.update({batched_token_num : profiled_latency})
+            decode_table = self.profile_data.get('decode')
+            decode_table.update({batch_size : profiled_latency})
 
         print('Profile of decode latency finished.')
         print('Decode latency stats: ')
-        for group, latency in self.profile_data['prefill'].items():
+        for group, latency in self.profile_data['decode'].items():
             print(group, latency)
 
 
@@ -391,7 +391,7 @@ class MolinkEngine(AsyncLLMEngine):
 
         model_config = config.model_config
         num_all_layers = model_config.hf_config.num_hidden_layers
-        self.model_hidden_size = model_config.hf_config.hiddensize
+        self.model_hidden_size = model_config.hf_config.hidden_size
         self.model_type_size = 8
 
         layers_range = [0, num_all_layers - 1]
