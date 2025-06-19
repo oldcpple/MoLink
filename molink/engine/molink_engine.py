@@ -73,7 +73,9 @@ class _MolinkEngine(_AsyncLLMEngine):
             self.async_callbacks = []
 
         self.profile_data = {'prefill' : {}, 'decode' : {}}
-        self.prerun_profile()
+        first_layer, end_layer = U.get_pp_indices(1, 1, 1)
+        if first_layer == 0:
+            self.prerun_profile()
 
     async def step_async(
         self, virtual_engine: int, ctx_idx: int
@@ -392,7 +394,7 @@ class MolinkEngine(AsyncLLMEngine):
         model_config = config.model_config
         num_all_layers = model_config.hf_config.num_hidden_layers
         self.model_hidden_size = model_config.hf_config.hidden_size
-        self.model_type_size = 8
+        self.model_type_size = 16
 
         layers_range = [0, num_all_layers - 1]
 
@@ -651,12 +653,12 @@ class MolinkEngine(AsyncLLMEngine):
         # bit
         batch_data_size = self.model_type_size * self.model_hidden_size * num_batched_token * batch_size
         # ms
-        return (batch_data_size / 1e6) / (bandwidth * 1e6) + latency 
+        return (batch_data_size) / (bandwidth * 1e6) * 1000 + latency 
     
     def culculate_batch_num(self): 
         # equal to pipeline size
         base_batch_num = 2
-        num_requests = len(self.engine.scheduler.waiting) + len(self.engine.scheduler.running)
+        num_requests = len(self.engine.scheduler[0].waiting) + len(self.engine.scheduler[0].running)
         if num_requests == 1:
             return 1
         if num_requests <= base_batch_num:
