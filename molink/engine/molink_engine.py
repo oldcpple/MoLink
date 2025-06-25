@@ -80,18 +80,9 @@ class _MolinkEngine(_AsyncLLMEngine):
     async def step_async(
         self, virtual_engine: int, ctx_idx: int
     ) -> List[Union[RequestOutput, PoolingRequestOutput]]:
-        """Performs one decoding iteration and returns newly generated results.
-        The workers are ran asynchronously if possible.
-
-        This function performs one decoding iteration of the engine. It first
-        schedules the sequences to be executed in the next iteration and the
-        token blocks to be swapped in/out/copy. Then, it executes the model
-        and updates the scheduler with the model outputs. Finally, it decodes
-        the sequences and returns the newly generated results.
-        """
         # these are cached outputs from previous iterations. None if on first
         # iteration
-        cached_outputs = self.cached_scheduler_outputs[ctx_idx]
+        cached_outputs = None
 
         seq_group_metadata_list = None #cached_outputs.seq_group_metadata_list
         scheduler_outputs = None #cached_outputs.scheduler_outputs
@@ -108,12 +99,11 @@ class _MolinkEngine(_AsyncLLMEngine):
         if not self._has_remaining_steps(seq_group_metadata_list):
 
             (seq_group_metadata_list, scheduler_outputs,
-             allow_async_output_proc
-             ) = self.scheduler[virtual_engine].schedule()
+            allow_async_output_proc
+            ) = self.scheduler[virtual_engine].schedule()
             
             ctx.seq_group_metadata_list = seq_group_metadata_list
             ctx.scheduler_outputs = scheduler_outputs
-
 
             finished_requests_ids = self.scheduler[
                 virtual_engine].get_and_reset_finished_requests_ids()
@@ -133,10 +123,10 @@ class _MolinkEngine(_AsyncLLMEngine):
             finished_requests_ids = list()
 
         if scheduler_outputs.is_empty():
-            await asyncio.sleep(0)
+            await asyncio.sleep(0.002)
             return ctx.request_outputs
-
-
+        
+        f.close()
 
         assert seq_group_metadata_list is not None
         assert scheduler_outputs is not None
@@ -163,7 +153,6 @@ class _MolinkEngine(_AsyncLLMEngine):
                 # We use ExecuteModelRequest to pass the last sampled_token_ids
                 # to each of the non-last PP stages for in-place prepare_input.
                 last_sampled_token_ids=last_sampled_token_ids)
-            
 
             record_seq_groups = []
             for sg in scheduler_outputs.scheduled_seq_groups:
@@ -173,10 +162,8 @@ class _MolinkEngine(_AsyncLLMEngine):
             outputs = await self.model_executor.execute_model_async(
                 execute_model_req)
             
-            if len(scheduler_outputs.scheduled_seq_groups) <= 0:
-                scheduler_outputs.scheduled_seq_groups.extend(record_seq_groups)
-            
-            
+            scheduler_outputs.scheduled_seq_groups = []
+            scheduler_outputs.scheduled_seq_groups.extend(record_seq_groups)
             
             # we set it to None during execution
             if allow_async_output_proc:
@@ -194,11 +181,11 @@ class _MolinkEngine(_AsyncLLMEngine):
                 self._process_model_outputs(ctx=ctx)
             outputs = []
 
+
         # Finish the current step for all the sequence groups.
         if self.scheduler_config.is_multi_step:
             for seq_group in seq_group_metadata_list:
                 seq_group.finish_step()
-
 
         if not self._has_remaining_steps(seq_group_metadata_list):
             # Clear the cache if we have finished all the steps
@@ -212,23 +199,14 @@ class _MolinkEngine(_AsyncLLMEngine):
             is_first_step_output: bool = False if not seq_group_metadata_list \
                 else seq_group_metadata_list[0].state.num_steps == 1
             
-            '''
-            if len(seq_group_metadata_list) > len(scheduler_outputs.scheduled_seq_groups):
-                seq_group_metadata_list = []
-            else:
-                scheduler_outputs.scheduled_seq_groups = []
-            '''
-              
             #scheduler_outputs.scheduled_seq_groups.append(record)
-
             ctx.append_output(outputs=outputs,
-                              seq_group_metadata_list=seq_group_metadata_list,
-                              scheduler_outputs=scheduler_outputs,
-                              is_async=allow_async_output_proc,
-                              is_last_step=True,
-                              is_first_step_output=is_first_step_output)
+                            seq_group_metadata_list=seq_group_metadata_list,
+                            scheduler_outputs=scheduler_outputs,
+                            is_async=allow_async_output_proc,
+                            is_last_step=True,
+                            is_first_step_output=is_first_step_output)
             
-
             if outputs and allow_async_output_proc:
                 assert len(
                     outputs
@@ -277,12 +255,11 @@ class _MolinkEngine(_AsyncLLMEngine):
         if is_prefill:
             pass
         else:
-            pass
-        
+            pass 
 
     def prerun_profile(self):
         prefill_batched_token_list = [10, 50, 100, 300, 500, 1000, 2000, 3000, 5000]
-        decode_batch_size_list = [1, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
+        decode_batch_size_list = [i for i in range(1, 201)]
 
         sampling_params = \
                 SamplingParams(top_p=0.99)
@@ -323,9 +300,9 @@ class _MolinkEngine(_AsyncLLMEngine):
             prefill_table.update({batched_token_num : profiled_latency})
 
         print('Profile of prefill latency finished.')
-        print('Prefill latency stats: ')
-        for group, latency in self.profile_data['prefill'].items():
-            print(group, latency)
+        #print('Prefill latency stats: ')
+        #for group, latency in self.profile_data['prefill'].items():
+        #    print(group, latency)
 
         # decode profile
         print('MoLink Engine starts to profile decode latency...')
@@ -364,9 +341,9 @@ class _MolinkEngine(_AsyncLLMEngine):
             decode_table.update({batch_size : profiled_latency})
 
         print('Profile of decode latency finished.')
-        print('Decode latency stats: ')
-        for group, latency in self.profile_data['decode'].items():
-            print(group, latency)
+        #print('Decode latency stats: ')
+        #for group, latency in self.profile_data['decode'].items():
+        #    print(group, latency)
 
 
 class MolinkEngine(AsyncLLMEngine):
@@ -542,48 +519,27 @@ class MolinkEngine(AsyncLLMEngine):
                     for ve in range(batch_num)
                 ]
                 has_requests_in_progress = [True] * batch_num
+            
+            assert len(requests_in_progress) == len(has_requests_in_progress)
+            if batch_num > len(requests_in_progress):
+                cur_len = len(requests_in_progress)
+                for i in range(cur_len, batch_num):
+                    requests_in_progress.append(asyncio.create_task(engine.engine_step(0, i)))
+                    has_requests_in_progress.append(True)
 
-            # Abort if iteration takes too long due to unrecoverable errors
-            # (eg. NCCL timeouts).
-            try:
-                assert len(requests_in_progress) == len(has_requests_in_progress)
-                if batch_num > len(requests_in_progress):
-                    cur_len = len(requests_in_progress)
-                    for i in range(cur_len, batch_num):
-                        requests_in_progress.append(asyncio.create_task(engine.engine_step(0, i)))
-                        has_requests_in_progress.append(True)
+            for idx in range(len(requests_in_progress)):
+                if idx >= batch_num:
+                    has_requests_in_progress[idx] = False
+                
+                elif requests_in_progress[idx].done():
+                    requests_in_progress[idx] = (
+                        asyncio.create_task(
+                            engine.engine_step(0, idx)))
+                    has_requests_in_progress[idx] = True
 
-                async with asyncio_timeout(ENGINE_ITERATION_TIMEOUT_S):
-                    done, _ = await asyncio.wait(
-                        requests_in_progress,
-                        return_when=asyncio.FIRST_COMPLETED)
-                    for _ in range(pipeline_parallel_size):
-                        await asyncio.sleep(0)
-                for task in done:
-                    result = task.result()
-                    virtual_engine = requests_in_progress.index(task)
-                    if not has_requests_in_progress[virtual_engine]:
-                        continue
-
-
-                    if virtual_engine >= batch_num:
-                        has_requests_in_progress[virtual_engine] = False
-
-                    else:
-                        requests_in_progress[virtual_engine] = (
-                            asyncio.create_task(
-                                engine.engine_step(0, virtual_engine)))
-                        has_requests_in_progress[virtual_engine] = True
-
-                    if virtual_engine == 0:
+                    if idx == 0:
                         batch_num = engine.culculate_batch_num()
-
-
-            except asyncio.TimeoutError as exc:
-                logger.error(
-                    "Engine iteration timed out. This should never happen!")
-                engine.set_errored(exc)
-                raise
+            
             await asyncio.sleep(0)
 
     async def engine_step(self, virtual_engine: int, ctx_idx: int) -> bool:
@@ -626,8 +582,8 @@ class MolinkEngine(AsyncLLMEngine):
     
     def culculate_compute_latency(self, num_batched_token, batch_size):
         #decode
-        left = -1
-        right = -1
+        left = 1
+        right = 1
 
         keys = sorted(self.engine.profile_data['decode'].keys())
 
@@ -649,25 +605,33 @@ class MolinkEngine(AsyncLLMEngine):
         # Mbps
         bandwidth = 1000
         # ms
-        latency = 20
+        latency = 5
         # bit
         batch_data_size = self.model_type_size * self.model_hidden_size * num_batched_token * batch_size
         # ms
-        return (batch_data_size) / (bandwidth * 1e6) * 1000 + latency 
+        return (batch_data_size) / (bandwidth * 1e6) * 1000 + latency
+
+    def get_avg_system_overhead(self):
+        # ms
+        return 5
     
     def culculate_batch_num(self): 
         # equal to pipeline size
         base_batch_num = 2
         num_requests = len(self.engine.scheduler[0].waiting) + len(self.engine.scheduler[0].running)
-        if num_requests == 1:
+        if num_requests <= 1:
             return 1
         if num_requests <= base_batch_num:
             return base_batch_num
+
         for batch_num in range(base_batch_num + 1, self.engine.max_batch_num + 1):
-            single_batch_size = num_requests / batch_num
-            single_compute_latency = self.culculate_compute_latency(1, single_batch_size)
+            schedule_limit = int(num_requests / batch_num + 1)
+            self.engine.scheduler[0].set_schedule_limit(schedule_limit)
+            single_batch_size = int(num_requests / batch_num)
+            single_compute_latency = self.culculate_compute_latency(1, single_batch_size) + self.get_avg_system_overhead()
             single_transmission_latency = self.culculate_transmission_latency(1, single_batch_size)
             bubble = (base_batch_num) * single_transmission_latency
             if (batch_num - base_batch_num) * single_compute_latency >= bubble:
+                print(f'batch num is: {batch_num}')
                 return batch_num 
         return self.engine.max_batch_num
