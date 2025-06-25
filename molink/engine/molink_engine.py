@@ -123,10 +123,8 @@ class _MolinkEngine(_AsyncLLMEngine):
             finished_requests_ids = list()
 
         if scheduler_outputs.is_empty():
-            await asyncio.sleep(0.002)
+            await asyncio.sleep(0)
             return ctx.request_outputs
-        
-        f.close()
 
         assert seq_group_metadata_list is not None
         assert scheduler_outputs is not None
