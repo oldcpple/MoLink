@@ -22,7 +22,7 @@ from vllm.utils import Device, PyObjectCache
 logger = init_logger(__name__)
 from vllm.core.scheduler import Scheduler, SchedulingBudget, PartialPrefillMetadata, SchedulerRunningOutputs, ScheduledSequenceGroup, \
                                  PreemptionMode, SchedulerSwappedInOutputs, SchedulerPrefillOutputs, seq_group_metadata_builder, \
-                                 scheduler_running_outputs_builder, scheduled_seq_group_builder
+                                 scheduler_running_outputs_builder, scheduled_seq_group_builder, SchedulerOutputs
 
 class MolinkScheduler(Scheduler):
 
@@ -36,9 +36,11 @@ class MolinkScheduler(Scheduler):
     ) -> None:
         
         super().__init__(scheduler_config, cache_config, lora_config, pipeline_parallel_size, output_proc_callback)
-        # records the requests that have been scheduled by former micro batches
+        # records the decode requests that have been scheduled by former micro batches
+        # or the prefill requests whose last chunk has been scheduled
         self.requests_on_fly = set()
         self.schedule_limit = 10
+        self.enable_chunked_prefill = True
 
     def set_schedule_limit(self, schedule_limit: int):
         self.schedule_limit = schedule_limit
@@ -47,6 +49,21 @@ class MolinkScheduler(Scheduler):
         if request_id in self.requests_on_fly:
             self.requests_on_fly.remove(request_id)
 
+    def _is_last_chunk(self, seq_group: SequenceGroup, token_chunk_size: int):
+        seq = seq_group.get_seqs()[0]
+        num_computed_tokens = seq.data.get_num_computed_tokens()
+        prompt_len = seq.data.get_prompt_len()
+        is_last_chunk = (num_computed_tokens + token_chunk_size) >= prompt_len
+        return is_last_chunk
+
+    def _schedule(self) -> SchedulerOutputs:
+        # these two methods remain as the same in vLLM original implementation.
+        # we mainly focus on the detial in _schedule_running and _schedule_prefill
+        if self.enable_chunked_prefill:
+            return self._schedule_chunked_prefill()
+        else:
+            return self._schedule_default()
+        
     def _schedule_running(
         self,
         budget: SchedulingBudget,
@@ -54,6 +71,8 @@ class MolinkScheduler(Scheduler):
         enable_chunking: bool = False,
         partial_prefill_metadata: Optional[PartialPrefillMetadata] = None,
     ) -> SchedulerRunningOutputs:
+        
+        enable_chunking = self.enable_chunked_prefill
 
         try:
 
@@ -88,6 +107,8 @@ class MolinkScheduler(Scheduler):
             reserve_queue: Deque[SequenceGroup] = deque()
 
             num_scheduled = 0
+            # store the request ids that we should release from on-fly set
+            release_ids = []
 
             while running_queue:
 
@@ -216,8 +237,29 @@ class MolinkScheduler(Scheduler):
                         curr_loras.add(seq_group.lora_int_id)
 
                     # mark the request as on-fly
-                    self.requests_on_fly.add(seq_group.request_id)
-                    num_scheduled += 1
+                    # if chunked prefill is not enabled, all requests scheduled here are in decode phase
+                    # just marked them unconditionally.
+                    if not self.enable_chunked_prefill:
+                        self.requests_on_fly.add(seq_group.request_id)
+                        release_ids.append(seq_group.request_id)
+                        num_scheduled += 1
+                    # otherwise, straightly mark the decode requests as on-fly.
+                    # as for prefill requests, we have to judge whether we have
+                    # scheduled its last chunk. If so, mark it as on-fly, otherwise
+                    # don't, since other micro batches should have chance to schedule
+                    # its remaining chunks.
+                    else:
+                        if not is_prefill:
+                            self.requests_on_fly.add(seq_group.request_id)
+                            release_ids.append(seq_group.request_id)
+                            num_scheduled += 1
+                        else:
+                            is_last_chunk = self._is_last_chunk(seq_group, num_uncached_new_tokens)
+                            if is_last_chunk:
+                                self.requests_on_fly.add(seq_group.request_id)
+                                release_ids.append(seq_group.request_id)
+                                num_scheduled += 1
+
             
             # push the ignored seq groups into running queue
             while len(reserve_queue) > 0:
@@ -374,6 +416,7 @@ class MolinkScheduler(Scheduler):
         leftover_waiting_sequences: Deque[SequenceGroup] = deque()
 
         num_scheduled = 0
+        release_ids = []
 
         while self._passed_delay(time.time()) and waiting_queue:
 
@@ -483,8 +526,21 @@ class MolinkScheduler(Scheduler):
             waiting_queue.popleft()
             self._allocate_and_set_running(seq_group)
 
-            self.requests_on_fly.add(seq_group.request_id)
-            num_scheduled += 1
+            #
+            if not self.enable_chunked_prefill:
+                self.requests_on_fly.add(seq_group.request_id)
+                release_ids.append(seq_group.request_id)
+                num_scheduled += 1
+            # if chunled prefill is enabled, before marking a request as on-fly,
+            # we have to judge whether we have scheduled the whole prompt in this
+            # schedule, if not, we can mark it here since other micro batches in the 
+            # same iteration should have chance to schedule its remaining chunks
+            else:
+                is_last_chunk = self._is_last_chunk(seq_group, num_new_tokens_uncached)
+                if is_last_chunk:
+                    self.requests_on_fly.add(seq_group.request_id)
+                    release_ids.append(seq_group.request_id)
+                    num_scheduled += 1
 
             if partial_prefill_metadata is not None:
                 partial_prefill_metadata.maybe_increment_partial_prefills(
