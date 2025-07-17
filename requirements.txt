@@ -1,4 +1,4 @@
-vllm == 0.8.5post1
+vllm == 0.9.1
 grpcio
 grpcio-tools
 protobuf
