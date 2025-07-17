@@ -123,7 +123,7 @@ class _MolinkEngine(_AsyncLLMEngine):
             finished_requests_ids = list()
 
         if scheduler_outputs.is_empty():
-            await asyncio.sleep(0)
+            await asyncio.sleep(0.002)
             return ctx.request_outputs
 
         assert seq_group_metadata_list is not None
@@ -501,7 +501,7 @@ class MolinkEngine(AsyncLLMEngine):
                 # Allow engine to be garbage collected while
                 # waiting for new requests
                 del engine
-                await asyncio.sleep(0)
+                await asyncio.sleep(0.001)
                 if engine_ref() is None:
                     return
                 await request_tracker.wait_for_new_requests()
@@ -538,7 +538,7 @@ class MolinkEngine(AsyncLLMEngine):
                     if idx == 0:
                         batch_num = engine.culculate_batch_num()
             
-            await asyncio.sleep(0)
+            await asyncio.sleep(0.001)
 
     async def engine_step(self, virtual_engine: int, ctx_idx: int) -> bool:
         """Kick the engine to process the waiting requests.
@@ -593,6 +593,8 @@ class MolinkEngine(AsyncLLMEngine):
                 left = keys[i]
                 right = keys[i + 1]
                 break
+        if left == right:
+            return self.engine.profile_data['decode'].get(left)
         left_latency = self.engine.profile_data['decode'].get(left)
         right_latency = self.engine.profile_data['decode'].get(right)
 
@@ -630,6 +632,5 @@ class MolinkEngine(AsyncLLMEngine):
             single_transmission_latency = self.culculate_transmission_latency(1, single_batch_size)
             bubble = (base_batch_num) * single_transmission_latency
             if (batch_num - base_batch_num) * single_compute_latency >= bubble:
-                print(f'batch num is: {batch_num}')
                 return batch_num 
         return self.engine.max_batch_num
