@@ -282,7 +282,7 @@ class MolinkEngineArgs(AsyncEngineArgs):
         decoding_config = DecodingConfig(
             guided_decoding_backend=self.guided_decoding_backend,
             reasoning_backend=self.reasoning_parser
-            if self.enable_reasoning else None,
+            if self.enable_reasoning else '',
         )
 
         show_hidden_metrics = False

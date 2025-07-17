@@ -17,9 +17,11 @@ from vllm.model_executor.model_loader.weight_utils import (
     get_gguf_extra_tensor_names, gguf_quant_weights_iterator,
     initialize_dummy_weights, np_cache_weights_iterator, pt_weights_iterator,
     runai_safetensors_weights_iterator, safetensors_weights_iterator)
-from vllm.model_executor.model_loader.loader import (DefaultModelLoader, DummyModelLoader, TensorizerLoader, ShardedStateLoader, 
+from vllm.model_executor.model_loader import (DefaultModelLoader, DummyModelLoader, TensorizerLoader, ShardedStateLoader, 
                                                      BitsAndBytesModelLoader, GGUFModelLoader, RunaiModelStreamerLoader,
-                                                     BaseModelLoader, device_loading_context)
+                                                     BaseModelLoader)
+
+from vllm.model_executor.model_loader.utils import device_loading_context
 
 from .utils import get_model_architecture
 
