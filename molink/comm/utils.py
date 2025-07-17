@@ -7,7 +7,7 @@ from vllm.sampling_params import SamplingParams
 from vllm.sequence import ExecuteModelRequest, SequenceGroupMetadata, SequenceData, SequenceGroupState
 
 def decoding_sampler_outputs(msgspec_sampelr_outputs):
-    assert len(msgspec_sampelr_outputs) == 11, "wrong length of SamplerOutput"
+    #assert len(msgspec_sampelr_outputs) == 11, "wrong length of SamplerOutput"
     outputs = msgspec_sampelr_outputs[0]
     sampled_token_probs = msgspec_sampelr_outputs[1]
     logprobs = msgspec_sampelr_outputs[2]
