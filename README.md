@@ -28,10 +28,10 @@ Once MoLink is successfully installed, you can follow this guide to deploy LLMs 
 This is an example, assume that we have 2 servers and each with one GPU, and attempt to deploy a 70B LLaMA2 model. On the first server, simply run:
 
 ```shell
-python -m molink.entrypoints.api_server --model meta-llama/Llama-2-70b-chat-hf --port 8080 --dtype=half --max_model_len 4096 --pipeline_parallel_size 2 --serving_layers 0,39
+python -m molink.entrypoints.api_server --model meta-llama/Llama-2-70b-chat-hf --port 8080 --dtype=half --max_model_len 4096 --serving_layers 0,39
 ```
 
-Two important arguments are  ***pipeline_parallel_size*** and ***serving_layers***. Set  ***pipeline_parallel_size*** to the number of servers used to serve the model, 2 in this example.  ***serving_layers*** claims the transformer layers this server will hold, please refer to ***config.json***  of your target model from Huggingface Hub to checkout how many layers it possesses in total before deciding how to split it (80 layers for 70B LLaMA2 in this example, we split it as 0-39 and 40-79 on two servers respectively).  Other arguments are inherited from vLLM and compatible with it.
+One important argument is ***serving_layers***, which claims the transformer layers this server will hold, please refer to ***config.json***  of your target model from Huggingface Hub to checkout how many layers it possesses in total before deciding how to split it (80 layers for 70B LLaMA2 in this example, we split it as 0-39 and 40-79 on two servers respectively). Unlike vLLM, you don't have to specify ***pipeline_parallel_size*** even though you have multiple nodes. Other arguments are inherited from vLLM and compatible with it.
 
 During startup, the first server will print logs like the following:
 
@@ -40,10 +40,10 @@ DISTRIBUTED SERVICE INFO: MoLink gRPC server works at 172.17.0.17:50051
 DISTRIBUTED SERVICE INFO: If this is the first node of the swarm, you can copy the DHT INFO as the initial peer of following nodes
 ```
 
-Simply copy the first line, namely address of the DHT server,  ***172.17.0.17:50051*** in this example, and use it as the ***initial_peer*** in the following command to start the second server:
+Simply copy the first line, namely address of the communication server,  ***172.17.0.17:50051*** in this example, and use it as the ***initial_peer*** in the following command to start the second server:
 
 ```shell
-python -m molink.entrypoints.api_server --model meta-llama/Llama-2-70b-chat-hf --port 9090 --dtype=half --max_model_len 4096 --pipeline_parallel_size 2 --serving_layers 40,79 --initial_peer 172.17.0.15:50051
+python -m molink.entrypoints.api_server --model meta-llama/Llama-2-70b-chat-hf --port 9090 --dtype=half --max_model_len 4096 --serving_layers 40,79 --initial_peer 172.17.0.15:50051
 ```
 
 You can also serve the LLM with a single node, in this case the system falls back to vLLM:
