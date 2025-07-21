@@ -832,6 +832,7 @@ async def init_app_state(
     ]
 
     state.engine_client = engine_client
+    state.enable_server_load_tracking = False
     state.log_stats = not args.disable_log_stats
     state.vllm_config = vllm_config
     model_config = vllm_config.model_config
