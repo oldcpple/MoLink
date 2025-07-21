@@ -116,6 +116,7 @@ async def init_app(
                   engine_args, usage_context=UsageContext.API_SERVER))
     
     app.state.engine_client = engine
+    app.state.enable_server_load_tracking = False
 
     return app
 
