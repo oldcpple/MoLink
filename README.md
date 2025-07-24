@@ -8,7 +8,7 @@ MoLink (***Mo***del-***Link***) is a distributed LLM serving system, aiming to a
 
 ## Installation Guide
 
-MoLink is built on top of vLLM, and will manage to keep compatible with its latest version, currently we support vLLM **v0.8.5post1**. Please ensure that your server meets the requirements for running vLLM, refer to [this](https://docs.vllm.ai/en/latest/).
+MoLink is built on top of vLLM, and will manage to keep compatible with its latest version, currently we support vLLM **v0.9.1**. Please ensure that your server meets the requirements for running vLLM, refer to [this](https://docs.vllm.ai/en/latest/).
 
 you can install MoLink with the following steps:
 
