@@ -1,11 +1,10 @@
 from vllm.distributed import GroupCoordinator, init_model_parallel_group, get_world_group, \
                             get_tensor_model_parallel_world_size, model_parallel_is_initialized, \
                             get_pp_group
-from typing import (TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple,
-                    Union)
+from typing import (List, Optional, Union)
 import torch
 import torch.distributed
-from torch.distributed import Backend, ProcessGroup
+from torch.distributed import Backend
 import vllm.distributed.parallel_state as P
 
 

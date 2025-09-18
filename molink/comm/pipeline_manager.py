@@ -1,4 +1,3 @@
-from typing import List, Optional
 import asyncio
 import json
 from .dht import DHTNode

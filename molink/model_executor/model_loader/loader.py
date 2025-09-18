@@ -5,18 +5,13 @@ import os
 import glob
 from torch import nn
 from vllm.logger import init_logger
-from vllm.model_executor.model_loader.utils import (ParamMapping,
-                                                    set_default_torch_dtype)
+from vllm.model_executor.model_loader.utils import (set_default_torch_dtype)
 from vllm.model_executor.layers.quantization.base_config import (
     QuantizeMethodBase)
-from vllm.config import (LoadConfig, LoadFormat, ModelConfig, ParallelConfig,
+from vllm.config import (LoadConfig, LoadFormat,
                          VllmConfig, set_current_vllm_config)
 from vllm.model_executor.model_loader.weight_utils import (
-    download_safetensors_index_file_from_hf, download_weights_from_hf,
-    filter_duplicate_safetensors_files, filter_files_not_needed_for_inference,
-    get_gguf_extra_tensor_names, gguf_quant_weights_iterator,
-    initialize_dummy_weights, np_cache_weights_iterator, pt_weights_iterator,
-    runai_safetensors_weights_iterator, safetensors_weights_iterator)
+    get_gguf_extra_tensor_names, initialize_dummy_weights)
 from vllm.model_executor.model_loader import (DefaultModelLoader, DummyModelLoader, TensorizerLoader, ShardedStateLoader, 
                                                      BitsAndBytesModelLoader, GGUFModelLoader, RunaiModelStreamerLoader,
                                                      BaseModelLoader)

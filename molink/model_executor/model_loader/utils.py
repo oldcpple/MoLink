@@ -1,7 +1,7 @@
-from typing import Dict, List, Tuple, Type
+from typing import Tuple, Type
 from torch import nn
 from vllm.config import ModelConfig
-from vllm.model_executor.models.adapters import (as_classification_model,
+from vllm.model_executor.models.adapters import (as_seq_cls_model,
                                                  as_embedding_model,
                                                  as_reward_model)
 from molink.model_executor.models.registry import ModelRegistry
@@ -25,7 +25,7 @@ def get_model_architecture(
     if model_config.task == "embed":
         model_cls = as_embedding_model(model_cls)
     elif model_config.task == "classify":
-        model_cls = as_classification_model(model_cls)
+        model_cls = as_seq_cls_model(model_cls)
     elif model_config.task == "reward":
         model_cls = as_reward_model(model_cls)
 
