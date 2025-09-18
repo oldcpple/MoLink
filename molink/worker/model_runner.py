@@ -1,16 +1,10 @@
 import torch
-import torch.distributed
-import torch.nn as nn
 import warnings
 from vllm import envs
-from vllm.worker.model_runner import GPUModelRunnerBase, ModelRunner
-from vllm.config import CompilationLevel, VllmConfig
-from vllm.distributed.parallel_state import graph_capture
+from vllm.worker.model_runner import ModelRunner
+from vllm.config import CompilationLevel
 from vllm.logger import init_logger
-from vllm.utils import (DeviceMemoryProfiler, GiB_bytes, PyObjectCache,
-                        async_tensor_h2d, flatten_2d_lists,
-                        is_pin_memory_available, supports_dynamo,
-                        weak_ref_tensor)
+from vllm.utils import (DeviceMemoryProfiler, supports_dynamo)
 from vllm.model_executor.models import supports_lora, supports_multimodal
 from vllm.lora.worker_manager import LRUCacheWorkerLoRAManager
 from vllm.prompt_adapter.worker_manager import (

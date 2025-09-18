@@ -1,23 +1,12 @@
-import enum
-import os
-import random
 import time
 from collections import deque
-from dataclasses import dataclass, field
-from typing import Callable, Deque, Dict, Iterable, List, Optional
-from typing import Sequence as GenericSequence
-from typing import Set, Tuple, Union
+from typing import Callable, Deque, List, Optional
+from typing import Set, Tuple
 
 from vllm.config import CacheConfig, LoRAConfig, SchedulerConfig
-from vllm.core.interfaces import AllocStatus, BlockSpaceManager
+from vllm.core.interfaces import AllocStatus
 from vllm.logger import init_logger
-from vllm.lora.request import LoRARequest
-from vllm.prompt_adapter.request import PromptAdapterRequest
-from vllm.sequence import (Sequence, SequenceData, SequenceGroup,
-                           SequenceGroupBase, SequenceGroupMetadata,
-                           SequenceGroupMetadataDelta, SequenceStage,
-                           SequenceStatus)
-from vllm.utils import Device, PyObjectCache
+from vllm.sequence import (SequenceGroup, SequenceStatus)
 
 logger = init_logger(__name__)
 from vllm.core.scheduler import Scheduler, SchedulingBudget, PartialPrefillMetadata, SchedulerRunningOutputs, ScheduledSequenceGroup, \
