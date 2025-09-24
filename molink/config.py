@@ -1,9 +1,5 @@
-import hashlib
-from dataclasses import dataclass, field, replace
-from pydantic import BaseModel, Field, PrivateAttr
-from typing import (TYPE_CHECKING, Any, Callable, ClassVar, Counter, Dict,
-                    Final, List, Literal, Mapping, Optional, Protocol, Set,
-                    Tuple, Type, Union)
+from dataclasses import dataclass, field
+from typing import Optional
 from vllm.config import VllmConfig, ModelConfig
 from vllm.model_executor.models import ModelRegistry
 from vllm.logger import init_logger
