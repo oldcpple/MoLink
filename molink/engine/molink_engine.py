@@ -1,10 +1,7 @@
 
-from typing import (Any, AsyncGenerator, Callable, Coroutine, Dict, Iterable,
-                    List, Mapping, Optional, Set, Tuple, Type, Union, overload)
+from typing import (Dict, List, Optional, Type, Union)
 import asyncio
-import copy
 import torch
-import random
 from functools import partial
 from weakref import ReferenceType
 from vllm.config import VllmConfig
@@ -12,16 +9,12 @@ import vllm.envs as envs
 from vllm.engine.llm_engine import SchedulerOutputState, SchedulerContext
 from vllm.executor.executor_base import ExecutorBase
 from vllm.engine.async_llm_engine import AsyncLLMEngine, _AsyncLLMEngine
-from vllm.engine.arg_utils import AsyncEngineArgs
 from vllm.engine.metrics_types import StatLoggerBase
 from vllm.usage.usage_lib import UsageContext
 from vllm.outputs import PoolingRequestOutput, RequestOutput
 from vllm.sequence import ExecuteModelRequest
 from vllm.logger import init_logger
-from vllm.engine.async_timeout import asyncio_timeout
-from vllm.utils import (Counter, Device, deprecate_kwargs,
-                        resolve_obj_by_qualname, weak_bind)
-from vllm.core.scheduler import ScheduledSequenceGroup
+from vllm.utils import weak_bind
 from vllm.sampling_params import SamplingParams
 from vllm.sequence import SequenceGroupMetadata
 from molink.config import MolinkConfig, PipelineConfig

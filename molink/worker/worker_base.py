@@ -1,7 +1,6 @@
-from typing import Any, Dict, List, Optional, Set, Tuple, Type, Union
+from typing import Any, Dict, List
 from vllm.worker.worker_base import WorkerWrapperBase
-from vllm.utils import (enable_trace_function_call_for_thread,
-                        resolve_obj_by_qualname, update_environment_variables)
+from vllm.utils import (enable_trace_function_call_for_thread)
 from vllm.config import set_current_vllm_config
 from molink.worker.worker import MolinkWorker
 

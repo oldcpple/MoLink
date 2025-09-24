@@ -1,27 +1,22 @@
 import gc
 import os
-from typing import Dict, List, Optional, Set, Tuple, Type, Union
+from typing import Dict, List, Optional, Tuple, Type
 import time
 import torch
-import traceback
 import dataclasses
-import torch.distributed
 from vllm.worker.worker import Worker, _check_if_gpu_supports_dtype
-import vllm.envs as envs
 from vllm.config import VllmConfig
 from vllm.model_executor import set_random_seed
 from vllm.distributed.kv_transfer import ensure_kv_transfer_initialized
 from vllm.distributed import (init_distributed_environment,
                               set_custom_all_reduce,
                               get_pp_group)
-from vllm.utils import (GiB_bytes, MemorySnapshot, bind_kv_cache,
-                        memory_profiling)
+from vllm.utils import MemorySnapshot
 from vllm.model_executor.layers.sampler import SamplerOutput
 from vllm.distributed import get_pp_group
 from vllm.worker.model_runner import GPUModelRunnerBase
 from vllm.sequence import IntermediateTensors, ExecuteModelRequest
 from vllm.worker.model_runner_base import (BroadcastableModelInput,
-                                           ModelRunnerBase,
                                            ModelRunnerInputBase)
 from vllm.worker.worker_base import WorkerInput, extract_previous_hidden_states
 from vllm.distributed import broadcast_tensor_dict
