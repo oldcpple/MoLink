@@ -99,8 +99,12 @@ class MultiprocessingDeliver(mp.Process):
                 grpc_metadata=json.dumps(grpc_metadata).encode('utf-8'),
                 virtual_engine=virtual_engine
             )
+            f = open('worker_trace.log', 'a')
+            print(f'{virtual_engine} trans starts at {time.time()}', file = f)
             stub = comm_pb2_grpc.CommServiceStub(self.channel_to_next_server)
             await stub.PushIntermediateTensors(grpc_request_data)
+            print(f'{virtual_engine} trans ends at {time.time()}', file = f)
+            f.close()
             
         except Exception as e:
             print(f'Async transmit error: {e}')
@@ -419,7 +423,12 @@ class MolinkMultiprocessingDistributedExecutor(MultiprocessingDistributedExecuto
                 tasks.append(
                     asyncio.create_task(call_stub(stub, trigger_request)))
                 
+            f = open('worker_trace.log', 'a')
+    
             results = await self.comm_handler.output_queue[virtual_engine].get()
+
+            print(f'{virtual_engine} back to head at {time.time()}', file = f)
+            f.close()
 
             return results
         
@@ -435,8 +444,17 @@ class MolinkMultiprocessingDistributedExecutor(MultiprocessingDistributedExecuto
         try:
             virtual_engine = execute_model_req.virtual_engine
 
+            f = open('worker_trace.log', 'a')
+            batch = execute_model_req.virtual_engine
+            batch_size = len(execute_model_req.seq_group_metadata_list)
+
             async with self.pp_lock:
+                print(f'{batch} {batch_size} compute starts at {time.time()}', file = f)
                 outputs = await self.driver_exec_model(execute_model_req)
+                torch.cuda.synchronize()
+                print(f'{batch} {batch_size} compute ends at {time.time()}', file = f)
+
+            f.close()
             
             if not P.IN_AUTODL:
                 server_list = grpc_metadata.get('server_list', []) if grpc_metadata else []

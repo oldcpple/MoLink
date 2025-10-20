@@ -4,6 +4,7 @@ import io
 import torch
 import asyncio
 import traceback
+import time
 from grpc import aio
 from vllm.distributed import get_pp_group
 from .utils import decoding_execute_model_req, decoding_sampler_outputs
@@ -62,10 +63,16 @@ class CommService(comm_pb2_grpc.CommService):
 
     async def PushSamplerOutput(self, result: comm_pb2.SamplerOutput, context: aio.ServicerContext):
         try:
+            f = open('worker_trace.log', 'a')
             virtual_engine = result.virtual_engine
+            print(f'{virtual_engine} trans starts at {time.time()}', file = f)
+
             outputs = msgspec.json.decode(result.output_data)
             outputs = [decoding_sampler_outputs(outputs)]
             self.output_queue[virtual_engine].put_nowait(outputs)
+
+            print(f'{virtual_engine} trans ends at {time.time()}', file = f)
+            f.close()
             return comm_pb2.GrpcResponseData(res = 1)
         
         except Exception as e:
@@ -79,7 +86,10 @@ class CommService(comm_pb2_grpc.CommService):
             virtual_engine = request.virtual_engine
             execute_model_req, intermediate_tensors, grpc_metadata = await self.input_queue[virtual_engine].get()
 
-            # 将张量反序列化操作提交到线程池
+            f = open('worker_trace.log', 'a')
+            print(f'{virtual_engine} recv at {time.time()}', file=f)
+            batch_size = len(execute_model_req.seq_group_metadata_list)
+
             def process_tensors(intermediate_tensors):
                 temp = IntermediateTensors(tensors={})
                 for k, v in intermediate_tensors.items():
@@ -95,7 +105,12 @@ class CommService(comm_pb2_grpc.CommService):
                     self.bind_executor._start_worker_execution_loop())
 
             async with self.pp_lock:
+                print(f'{virtual_engine} {batch_size} compute starts at {time.time()}', file=f)
                 pipeline_outputs = await self.bind_executor.driver_exec_model(execute_model_req, intermediate_tensors)
+                torch.cuda.synchronize()
+                print(f'{virtual_engine} {batch_size} compute ends at {time.time()}', file = f)
+
+            f.close()
 
                 
             pipeline_outputs = pipeline_outputs[0]

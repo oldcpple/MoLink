@@ -54,6 +54,7 @@ from vllm.model_executor.models.utils import (AutoWeightsLoader, PPMissingLayer,
                     maybe_prefix)
 
 from .utils import make_layers
+import time
 
 class LlamaMLP(nn.Module):
 
@@ -272,19 +273,41 @@ class LlamaDecoderLayer(nn.Module):
         residual: Optional[torch.Tensor],
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         # Self Attention
+
+        f = open('worker_trace.log', 'a')
+
         if residual is None:
             residual = hidden_states
             hidden_states = self.input_layernorm(hidden_states)
         else:
             hidden_states, residual = self.input_layernorm(
                 hidden_states, residual)
+            
+        if not torch.cuda.is_current_stream_capturing():
+            print(f'attn starts at {time.time()}', file=f)
+            
         hidden_states = self.self_attn(positions=positions,
                                        hidden_states=hidden_states)
+        
+        if not torch.cuda.is_current_stream_capturing():
+            torch.cuda.synchronize()
+            print(f'attn ends at {time.time()}', file=f)
 
         # Fully Connected
         hidden_states, residual = self.post_attention_layernorm(
             hidden_states, residual)
+        
+        if not torch.cuda.is_current_stream_capturing():
+            print(f'mlp starts at {time.time()}', file=f)
+        
         hidden_states = self.mlp(hidden_states)
+
+        if not torch.cuda.is_current_stream_capturing():
+            torch.cuda.synchronize()
+            print(f'mlp ends at {time.time()}', file=f)
+
+        f.close()
+
         return hidden_states, residual
 
 
