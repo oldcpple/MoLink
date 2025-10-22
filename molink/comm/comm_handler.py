@@ -63,16 +63,11 @@ class CommService(comm_pb2_grpc.CommService):
 
     async def PushSamplerOutput(self, result: comm_pb2.SamplerOutput, context: aio.ServicerContext):
         try:
-            f = open('worker_trace.log', 'a')
             virtual_engine = result.virtual_engine
-            print(f'{virtual_engine} trans starts at {time.time()}', file = f)
 
             outputs = msgspec.json.decode(result.output_data)
             outputs = [decoding_sampler_outputs(outputs)]
             self.output_queue[virtual_engine].put_nowait(outputs)
-
-            print(f'{virtual_engine} trans ends at {time.time()}', file = f)
-            f.close()
             return comm_pb2.GrpcResponseData(res = 1)
         
         except Exception as e:
@@ -87,6 +82,20 @@ class CommService(comm_pb2_grpc.CommService):
             execute_model_req, intermediate_tensors, grpc_metadata = await self.input_queue[virtual_engine].get()
 
             f = open('worker_trace.log', 'a')
+
+            is_prefill = execute_model_req.seq_group_metadata_list[0].is_prompt
+
+            cur_stage = ''
+            if is_prefill:
+                cur_stage = 'prefill'
+            else:
+                cur_stage = 'decode'
+
+            cur = time.time()
+            for seq_group_metadata in execute_model_req.seq_group_metadata_list:
+                cur_request_id = seq_group_metadata.request_id
+                print(f'request {cur_request_id} arrives at worker at {cur}', file = f)
+
             print(f'{virtual_engine} recv at {time.time()}', file=f)
             batch_size = len(execute_model_req.seq_group_metadata_list)
 
@@ -105,10 +114,22 @@ class CommService(comm_pb2_grpc.CommService):
                     self.bind_executor._start_worker_execution_loop())
 
             async with self.pp_lock:
-                print(f'{virtual_engine} {batch_size} compute starts at {time.time()}', file=f)
+                print(f'{virtual_engine} {batch_size} compute starts ({cur_stage}) at {time.time()}', file=f)
+
+                cur = time.time()
+                for seq_group_metadata in execute_model_req.seq_group_metadata_list:
+                    cur_request_id = seq_group_metadata.request_id
+                    print(f'request {cur_request_id} starts to compute ({cur_stage}) on worker at {cur}', file = f)
+
                 pipeline_outputs = await self.bind_executor.driver_exec_model(execute_model_req, intermediate_tensors)
                 torch.cuda.synchronize()
-                print(f'{virtual_engine} {batch_size} compute ends at {time.time()}', file = f)
+
+                cur = time.time()
+                for seq_group_metadata in execute_model_req.seq_group_metadata_list:
+                    cur_request_id = seq_group_metadata.request_id
+                    print(f'request {cur_request_id} finishes computing ({cur_stage}) on worker at {cur}', file = f)
+
+                print(f'{virtual_engine} {batch_size} compute ends ({cur_stage}) at {time.time()}', file = f)
 
             f.close()
 

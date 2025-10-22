@@ -20,7 +20,7 @@ from vllm.utils import (_run_task_with_lock, get_distributed_init_method,
 from vllm.config import VllmConfig
 from vllm.model_executor.layers.sampler import SamplerOutput
 from vllm.distributed import get_pp_group
-from vllm.sequence import IntermediateTensors, ExecuteModelRequest
+from vllm.sequence import IntermediateTensors, ExecuteModelRequest, SequenceStage
 from molink.worker.worker_base import MolinkWorkerWrapperBase
 from molink.config import MolinkConfig
 from molink.comm.proto import comm_pb2, comm_pb2_grpc
@@ -427,6 +427,10 @@ class MolinkMultiprocessingDistributedExecutor(MultiprocessingDistributedExecuto
     
             results = await self.comm_handler.output_queue[virtual_engine].get()
 
+            cur = time.time()
+            for seq_group_metadata in execute_model_req.seq_group_metadata_list:
+                cur_request_id = seq_group_metadata.request_id
+                print(f'request {cur_request_id} returns to head server at {cur}', file = f)
             print(f'{virtual_engine} back to head at {time.time()}', file = f)
             f.close()
 
@@ -448,11 +452,29 @@ class MolinkMultiprocessingDistributedExecutor(MultiprocessingDistributedExecuto
             batch = execute_model_req.virtual_engine
             batch_size = len(execute_model_req.seq_group_metadata_list)
 
+            is_prefill = execute_model_req.seq_group_metadata_list[0].is_prompt
+
+            cur_stage = ''
+            if is_prefill:
+                cur_stage = 'prefill'
+            else:
+                cur_stage = 'decode'
+
             async with self.pp_lock:
-                print(f'{batch} {batch_size} compute starts at {time.time()}', file = f)
+                print(f'{batch} {batch_size} compute starts ({cur_stage}) at {time.time()}', file = f)
+
+                cur = time.time()
+                for seq_group_metadata in execute_model_req.seq_group_metadata_list:
+                    cur_request_id = seq_group_metadata.request_id
+                    print(f'request {cur_request_id} starts to compute ({cur_stage}) on worker at {cur}', file = f)
+
                 outputs = await self.driver_exec_model(execute_model_req)
                 torch.cuda.synchronize()
-                print(f'{batch} {batch_size} compute ends at {time.time()}', file = f)
+                cur = time.time()
+                for seq_group_metadata in execute_model_req.seq_group_metadata_list:
+                    cur_request_id = seq_group_metadata.request_id
+                    print(f'request {cur_request_id} finishes computing ({cur_stage}) on worker at {cur}', file = f)
+                print(f'{batch} {batch_size} compute ends ({cur_stage}) at {time.time()}', file = f)
 
             f.close()
             
