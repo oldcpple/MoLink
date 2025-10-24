@@ -1,0 +1,15 @@
+Metadata-Version: 2.1
+Name: molink
+Version: 0.1.0
+Summary: High-performance and cost-efficient distributed LLM serving engine
+Home-page: https://github.com/oldcpple/molink-rebuild
+Author: EmNets
+Author-email: 
+License: UNKNOWN
+Platform: UNKNOWN
+Classifier: Programming Language :: Python :: 3
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+
+UNKNOWN
+

@@ -1,0 +1,6 @@
+vllm == 0.7.2
+grpcio
+grpcio-tools
+protobuf == 5.29.0
+kademlia
+requests
