@@ -11,7 +11,7 @@ from vllm.sequence import (SequenceGroup, SequenceStatus)
 logger = init_logger(__name__)
 from vllm.core.scheduler import Scheduler, SchedulingBudget, PartialPrefillMetadata, SchedulerRunningOutputs, ScheduledSequenceGroup, \
                                  PreemptionMode, SchedulerSwappedInOutputs, SchedulerPrefillOutputs, seq_group_metadata_builder, \
-                                 scheduler_running_outputs_builder, scheduled_seq_group_builder
+                                 scheduler_running_outputs_builder, scheduled_seq_group_builder, SchedulerOutputs
 
 class MolinkScheduler(Scheduler):
 
@@ -26,15 +26,132 @@ class MolinkScheduler(Scheduler):
         
         super().__init__(scheduler_config, cache_config, lora_config, pipeline_parallel_size, output_proc_callback)
         # records the requests that have been scheduled by former micro batches
+        self.enable_chunking = self.scheduler_config.chunked_prefill_enabled
         self.requests_on_fly = set()
+        # num of max reqs for default scheduling
         self.schedule_limit = 10
+        # num of max batched tokens for chunked prefill scheduling
+        self.decode_token_limit_in_chunk = self.scheduler_config.max_num_batched_tokens
+        self.prefill_token_limit_in_chunk = self.scheduler_config.max_num_batched_tokens
 
     def set_schedule_limit(self, schedule_limit: int):
         self.schedule_limit = schedule_limit
 
+    def set_schedule_limit_chunked_prefill(self, max_num_token_decode: int, max_num_token_prefill: int):
+        self.decode_token_limit_in_chunk = max_num_token_decode
+        self.scheduler_config.max_num_batched_tokens = max_num_token_prefill
+
     def _mark_seq_as_schedule_free(self, request_id: str):
         if request_id in self.requests_on_fly:
             self.requests_on_fly.remove(request_id)
+
+    def _schedule(self) -> SchedulerOutputs:
+        if self.scheduler_config.chunked_prefill_enabled:
+            return self._schedule_chunked_prefill()
+        else:
+            return self._schedule_default()
+        
+    def _schedule_chunked_prefill(self) -> SchedulerOutputs:
+        budget = SchedulingBudget(
+            token_budget=self.scheduler_config.max_num_batched_tokens,
+            max_num_seqs=self.scheduler_config.max_num_seqs,
+        )
+        curr_loras: Set[int] = set()
+
+        prefills = SchedulerPrefillOutputs.create_empty()
+        swapped_in = SchedulerSwappedInOutputs.create_empty()
+
+        # Create partial prefill metadata
+        partial_prefill_metadata = PartialPrefillMetadata.from_queues(
+            running=self.running,
+            waiting=self.waiting,
+            scheduler_config=self.scheduler_config,
+        )
+
+        # Decoding should be always scheduled first by fcfs.
+        running_scheduled = self._schedule_running(
+            budget,
+            curr_loras,
+            enable_chunking=True,
+            partial_prefill_metadata=partial_prefill_metadata,
+        )
+
+        # Schedule swapped out requests.
+        # If preemption happens, it means we don't have space for swap-in.
+        if len(running_scheduled.preempted) + len(
+                running_scheduled.swapped_out) == 0:
+            swapped_in = self._schedule_swapped(budget, curr_loras)
+
+        prefills = self._schedule_prefills(
+            budget,
+            curr_loras,
+            enable_chunking=True,
+            partial_prefill_metadata=partial_prefill_metadata,
+        )
+
+        assert (budget.num_batched_tokens
+                <= self.scheduler_config.max_num_batched_tokens)
+        assert budget.num_curr_seqs <= self.scheduler_config.max_num_seqs
+
+        # Update waiting requests.
+        self.waiting.extendleft(running_scheduled.preempted)
+
+        # Update new running requests.
+        # By default, vLLM scheduler prioritizes prefills.
+        # Once chunked prefill is enabled,
+        # the policy is changed to prioritize decode requests.
+        self.running.extend(
+            [s.seq_group for s in swapped_in.decode_seq_groups])
+        self.running.extend(
+            [s.seq_group for s in swapped_in.prefill_seq_groups])
+        self.running.extend(
+            [s.seq_group for s in running_scheduled.decode_seq_groups])
+        # Because multiple prefills may be running concurrently, we need to
+        # make sure that prefills which are scheduled to finish are listed
+        # before those that won't. This is so that on the next scheduling
+        # iteration when they have transitioned to the decode stage, they are
+        # properly prioritized over sequences that are still in the prefill
+        # stage.
+        self.running.extend(
+            self._order_finishing_prefills_first(
+                running_scheduled.prefill_seq_groups))
+        self.running.extend([s.seq_group for s in prefills.seq_groups])
+
+        # Update swapped requests.
+        self.swapped.extend(running_scheduled.swapped_out)
+        # Put prefills first due to Attention backend ordering assumption.
+        scheduled_seq_groups = (prefills.seq_groups +
+                                running_scheduled.prefill_seq_groups +
+                                swapped_in.prefill_seq_groups +
+                                running_scheduled.decode_seq_groups +
+                                swapped_in.decode_seq_groups)
+        num_prefill_groups = (len(prefills.seq_groups) +
+                              len(swapped_in.prefill_seq_groups) +
+                              len(running_scheduled.prefill_seq_groups))
+        # If all prompts, then we set num_lookahead_slots to 0
+        # this allows us to go through the `no_spec` path in
+        # `spec_decode_worker.py`
+        all_prefills = len(scheduled_seq_groups) == num_prefill_groups
+        num_lookahead_slots = (0 if
+                               (all_prefills
+                                and not self.scheduler_config.is_multi_step)
+                               else running_scheduled.num_lookahead_slots)
+        return SchedulerOutputs(
+            scheduled_seq_groups=scheduled_seq_groups,
+            num_prefill_groups=num_prefill_groups,
+            num_batched_tokens=budget.num_batched_tokens +
+            budget.num_cached_tokens,
+            blocks_to_swap_in=swapped_in.blocks_to_swap_in,
+            blocks_to_swap_out=running_scheduled.blocks_to_swap_out,
+            blocks_to_copy=running_scheduled.blocks_to_copy +
+            swapped_in.blocks_to_copy,
+            ignored_seq_groups=prefills.ignored_seq_groups +
+            swapped_in.infeasible_seq_groups,
+            num_lookahead_slots=num_lookahead_slots,
+            running_queue_size=len(self.running),
+            preempted=(len(running_scheduled.preempted) +
+                       len(running_scheduled.swapped_out)),
+        )
 
     def _schedule_running(
         self,
@@ -77,10 +194,15 @@ class MolinkScheduler(Scheduler):
             reserve_queue: Deque[SequenceGroup] = deque()
 
             num_scheduled = 0
+            num_scheduled_token_in_chunk = 0
 
             while running_queue:
 
-                if num_scheduled >= self.schedule_limit:
+                # case chunked prefill
+                if enable_chunking and num_scheduled_token_in_chunk >= self.decode_token_limit_in_chunk:
+                    break
+                # case default
+                elif num_scheduled >= self.schedule_limit:
                     break
 
                 seq_group = running_queue[0]
@@ -207,6 +329,8 @@ class MolinkScheduler(Scheduler):
                     # mark the request as on-fly
                     self.requests_on_fly.add(seq_group.request_id)
                     num_scheduled += 1
+                    # for each decode req, scheduled token num must be 1 
+                    num_scheduled_token_in_chunk += 1
             
             # push the ignored seq groups into running queue
             while len(reserve_queue) > 0:
@@ -363,10 +487,16 @@ class MolinkScheduler(Scheduler):
         leftover_waiting_sequences: Deque[SequenceGroup] = deque()
 
         num_scheduled = 0
+        num_scheduled_token_in_chunk = 0
 
         while self._passed_delay(time.time()) and waiting_queue:
 
-            if num_scheduled >= self.schedule_limit:
+            # case chunked prefill
+            # scheduler_config.max_num_batched_tokens may be modified during running
+            if enable_chunking and num_scheduled_token_in_chunk >= self.scheduler_config.max_num_batched_tokens:
+                break
+            # case default
+            elif num_scheduled >= self.schedule_limit:
                 break
 
             seq_group = waiting_queue[0]
@@ -474,6 +604,7 @@ class MolinkScheduler(Scheduler):
 
             self.requests_on_fly.add(seq_group.request_id)
             num_scheduled += 1
+            num_scheduled_token_in_chunk += num_new_tokens_uncached
 
             if partial_prefill_metadata is not None:
                 partial_prefill_metadata.maybe_increment_partial_prefills(
