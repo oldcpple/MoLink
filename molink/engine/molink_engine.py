@@ -16,7 +16,7 @@ from vllm.sequence import ExecuteModelRequest
 from vllm.logger import init_logger
 from vllm.utils import weak_bind
 from vllm.sampling_params import SamplingParams
-from vllm.sequence import SequenceGroupMetadata
+from vllm.sequence import SequenceGroupMetadata, SequenceStage
 from molink.config import MolinkConfig, PipelineConfig
 from molink.executor.mp_distributed_executor import MolinkMultiprocessingDistributedExecutor
 from .arg_utils import MolinkEngineArgs
@@ -67,7 +67,7 @@ class _MolinkEngine(_AsyncLLMEngine):
 
         self.profile_data = {'prefill' : {}, 'decode' : {}}
         first_layer, end_layer = U.get_pp_indices(1, 1, 1)
-        if first_layer == 0:
+        if first_layer == 0 and not self.scheduler[0].scheduler_config.chunked_prefill_enabled:
             self.prerun_profile()
 
     async def step_async(
@@ -503,7 +503,10 @@ class MolinkEngine(AsyncLLMEngine):
                     return
                 logger.debug("Got new requests!")
 
-                batch_num = engine.culculate_batch_num()
+                if engine.engine.scheduler[0].scheduler_config.chunked_prefill_enabled:
+                    batch_num = engine.culculate_batch_num_chunked_prefill()
+                else:
+                    batch_num = engine.culculate_batch_num_default()
 
                 requests_in_progress = [
                     asyncio.create_task(engine.engine_step(0, ve))
@@ -529,7 +532,10 @@ class MolinkEngine(AsyncLLMEngine):
                     has_requests_in_progress[idx] = True
 
                     if idx == 0:
-                        batch_num = engine.culculate_batch_num()
+                        if engine.engine.scheduler[0].scheduler_config.chunked_prefill_enabled:
+                            batch_num = engine.culculate_batch_num_chunked_prefill()
+                        else:
+                            batch_num = engine.culculate_batch_num_default()
             
             await asyncio.sleep(0.001)
 
@@ -608,7 +614,7 @@ class MolinkEngine(AsyncLLMEngine):
         # ms
         return 5
     
-    def culculate_batch_num(self): 
+    def culculate_batch_num_default(self): 
         # equal to pipeline size
         base_batch_num = 2
         num_requests = len(self.engine.scheduler[0].waiting) + len(self.engine.scheduler[0].running)
@@ -627,3 +633,18 @@ class MolinkEngine(AsyncLLMEngine):
             if (batch_num - base_batch_num) * single_compute_latency >= bubble:
                 return batch_num 
         return self.engine.max_batch_num
+
+    def culculate_batch_num_chunked_prefill(self):
+        # experimental 
+        base_batch_num = 2
+
+        num_decode_requests = 0
+        for sg in self.engine.scheduler[0].running:
+            if sg.first_seq.data.stage == SequenceStage.DECODE:
+                num_decode_requests += 1
+        
+        max_num_token_decode = num_decode_requests / 2 + 1
+        max_num_token_prefill = self.engine.scheduler[0].scheduler_config.max_num_batched_tokens
+        self.engine.scheduler[0].set_schedule_limit_chunked_prefill(max_num_token_decode, max_num_token_prefill)
+
+        return base_batch_num
