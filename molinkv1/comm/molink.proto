@@ -1,0 +1,109 @@
+// gRPC protocol definitions for MoLink cross-node pipeline parallelism
+
+syntax = "proto3";
+
+package molink;
+
+// Entry for a single tensor in intermediate tensors
+message TensorEntry {
+    string key = 1;
+    bytes tensor_data = 2;
+}
+
+// Intermediate tensors passed between pipeline stages
+message IntermediateTensors {
+    repeated TensorEntry tensors = 1;
+}
+
+// Request data for pushing intermediate tensors to next stage
+message GrpcRequestData {
+    bytes scheduler_output = 1;  // Serialized SchedulerOutput
+    IntermediateTensors intermediate_tensors = 2;
+    bytes grpc_metadata = 3;  // JSON metadata about pipeline
+    int32 virtual_engine = 4;
+}
+
+// Response for gRPC calls
+message GrpcResponseData {
+    int32 res = 1;  // 0 = failure, 1 = success
+    string error_message = 2;
+}
+
+// Trigger request to start execution on a worker node
+message GrpcTriggerRequest {
+    int32 virtual_engine = 1;
+    bytes scheduler_output = 2;  // Serialized SchedulerOutput for worker
+}
+
+// Sampler output returned from the last stage
+message SamplerOutput {
+    bytes output_data = 1;
+    int32 virtual_engine = 2;
+}
+
+// Node information for joining the pipeline
+message NodeInfo {
+    string ip = 1;  // IP:port of the node
+    int32 start_layer = 2;  // First layer this node handles
+    int32 end_layer = 3;  // Last layer this node handles
+    int32 pp_rank = 4;  // Pipeline parallel rank
+    int32 tp_size = 5;  // Tensor parallel size on this node
+}
+
+// Pipeline topology information
+message PipelineTopology {
+    repeated NodeInfo nodes = 1;
+    int32 total_layers = 2;
+}
+
+// Health check request/response
+message HealthCheckRequest {}
+
+message HealthCheckResponse {
+    bool healthy = 1;
+    string status = 2;
+}
+
+// KV cache configuration synchronization
+message KVCacheConfigData {
+    int32 num_gpu_blocks = 1;
+    int32 num_cpu_blocks = 2;
+    bytes kv_cache_config = 3;  // Serialized KVCacheConfig
+}
+
+// Model configuration for initialization
+message ModelConfigData {
+    bytes vllm_config = 1;  // Serialized VllmConfig
+    int32 pp_rank = 2;
+    int32 pp_size = 3;
+}
+
+// The MoLink communication service
+service MolinkService {
+    // Join the pipeline as a worker node
+    rpc JoinPipeline(NodeInfo) returns (GrpcResponseData);
+    
+    // Get current pipeline topology
+    rpc GetTopology(HealthCheckRequest) returns (PipelineTopology);
+    
+    // Push intermediate tensors to next pipeline stage
+    rpc PushIntermediateTensors(GrpcRequestData) returns (GrpcResponseData);
+    
+    // Return sampler output to head node
+    rpc PushSamplerOutput(SamplerOutput) returns (GrpcResponseData);
+    
+    // Trigger worker to execute a step
+    rpc ExecuteWorkerStep(GrpcTriggerRequest) returns (GrpcResponseData);
+    
+    // Synchronize KV cache configuration across nodes
+    rpc SyncKVCacheConfig(KVCacheConfigData) returns (GrpcResponseData);
+    
+    // Initialize model on worker node
+    rpc InitializeModel(ModelConfigData) returns (GrpcResponseData);
+    
+    // Health check
+    rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+    
+    // Shutdown worker
+    rpc Shutdown(HealthCheckRequest) returns (GrpcResponseData);
+}
