@@ -130,15 +130,15 @@ class MolinkService(molink_pb2_grpc.MolinkServiceServicer):
         """
         try:
             virtual_engine = request.virtual_engine
-            logger.info(
-                f"[MoLink][VE{virtual_engine}][SERVICE] PushIntermediateTensors called"
-            )
+            # logger.info(
+            #     f"[MoLink][VE{virtual_engine}][SERVICE] PushIntermediateTensors called"
+            # )
 
             # Store raw bytes for deferred deserialization
             scheduler_output_bytes = request.scheduler_output
-            logger.info(
-                f"[MoLink][VE{virtual_engine}][SERVICE] Received scheduler output: {len(scheduler_output_bytes)} bytes"
-            )
+            # logger.info(
+            #     f"[MoLink][VE{virtual_engine}][SERVICE] Received scheduler output: {len(scheduler_output_bytes)} bytes"
+            # )
 
             # Store tensor bytes (deserialization will be done in worker)
             intermediate_tensors_bytes = {}
@@ -146,15 +146,15 @@ class MolinkService(molink_pb2_grpc.MolinkServiceServicer):
                 key = entry.key
                 byte_data = entry.tensor_data
                 intermediate_tensors_bytes[key] = byte_data
-            logger.info(
-                f"[MoLink][VE{virtual_engine}][SERVICE] Received {len(intermediate_tensors_bytes)} tensors"
-            )
+            # logger.info(
+            #     f"[MoLink][VE{virtual_engine}][SERVICE] Received {len(intermediate_tensors_bytes)} tensors"
+            # )
 
             # Parse grpc metadata
             grpc_metadata = deserialize_metadata(request.grpc_metadata)
-            logger.info(
-                f"[MoLink][VE{virtual_engine}][SERVICE] Parsed grpc metadata: {list(grpc_metadata.keys())}"
-            )
+            # logger.info(
+            #     f"[MoLink][VE{virtual_engine}][SERVICE] Parsed grpc metadata: {list(grpc_metadata.keys())}"
+            # )
 
             # Put into input queue for processing
             await self.input_queue[virtual_engine].put(
@@ -164,9 +164,9 @@ class MolinkService(molink_pb2_grpc.MolinkServiceServicer):
                     grpc_metadata,
                 )
             )
-            logger.info(
-                f"[MoLink][VE{virtual_engine}][SERVICE] Data placed in input queue (size: {self.input_queue[virtual_engine].qsize()})"
-            )
+            # logger.info(
+            #     f"[MoLink][VE{virtual_engine}][SERVICE] Data placed in input queue (size: {self.input_queue[virtual_engine].qsize()})"
+            # )
 
             return molink_pb2.GrpcResponseData(res=1)
 
@@ -192,21 +192,21 @@ class MolinkService(molink_pb2_grpc.MolinkServiceServicer):
         """
         try:
             virtual_engine = request.virtual_engine
-            logger.info(
-                f"[MoLink][VE{virtual_engine}][SERVICE] PushSamplerOutput called"
-            )
+            # logger.info(
+            #     f"[MoLink][VE{virtual_engine}][SERVICE] PushSamplerOutput called"
+            # )
 
             # Store raw bytes - will be deserialized by the executor
             output_bytes = request.output_data
-            logger.info(
-                f"[MoLink][VE{virtual_engine}][SERVICE] Received sampler output: {len(output_bytes)} bytes"
-            )
+            # logger.info(
+            #     f"[MoLink][VE{virtual_engine}][SERVICE] Received sampler output: {len(output_bytes)} bytes"
+            # )
 
             # Put into output queue for the head node to collect
             await self.output_queue[virtual_engine].put(output_bytes)
-            logger.info(
-                f"[MoLink][VE{virtual_engine}][SERVICE] Output placed in queue (size: {self.output_queue[virtual_engine].qsize()})"
-            )
+            # logger.info(
+            #     f"[MoLink][VE{virtual_engine}][SERVICE] Output placed in queue (size: {self.output_queue[virtual_engine].qsize()})"
+            # )
 
             return molink_pb2.GrpcResponseData(res=1)
 
@@ -233,23 +233,23 @@ class MolinkService(molink_pb2_grpc.MolinkServiceServicer):
         """
         try:
             virtual_engine = request.virtual_engine
-            logger.info(
-                f"[MoLink][VE{virtual_engine}][WORKER] ExecuteWorkerStep called"
-            )
+            # logger.info(
+            #     f"[MoLink][VE{virtual_engine}][WORKER] ExecuteWorkerStep called"
+            # )
 
             # Get data from input queue (with timeout to detect issues)
-            logger.info(
-                f"[MoLink][VE{virtual_engine}][WORKER] Waiting for data from input queue..."
-            )
+            # logger.info(
+            #     f"[MoLink][VE{virtual_engine}][WORKER] Waiting for data from input queue..."
+            # )
             try:
                 scheduler_output_bytes, intermediate_tensors_bytes, grpc_metadata = (
                     await asyncio.wait_for(
                         self.input_queue[virtual_engine].get(), timeout=10.0
                     )
                 )
-                logger.info(
-                    f"[MoLink][VE{virtual_engine}][WORKER] Got data from input queue: scheduler={len(scheduler_output_bytes)} bytes, tensors={len(intermediate_tensors_bytes)} items"
-                )
+                # logger.info(
+                #     f"[MoLink][VE{virtual_engine}][WORKER] Got data from input queue: scheduler={len(scheduler_output_bytes)} bytes, tensors={len(intermediate_tensors_bytes)} items"
+                # )
             except asyncio.TimeoutError:
                 logger.error(
                     f"[MoLink][VE{virtual_engine}][WORKER] TIMEOUT waiting for input queue! Queue size: {self.input_queue[virtual_engine].qsize()}"
@@ -257,9 +257,9 @@ class MolinkService(molink_pb2_grpc.MolinkServiceServicer):
                 raise
 
             # Deserialize tensors in thread pool to not block event loop
-            logger.info(
-                f"[MoLink][VE{virtual_engine}][WORKER] Deserializing tensors..."
-            )
+            # logger.info(
+            #     f"[MoLink][VE{virtual_engine}][WORKER] Deserializing tensors..."
+            # )
 
             def deserialize_tensors(
                 tensor_bytes: Dict[str, bytes],
@@ -273,14 +273,14 @@ class MolinkService(molink_pb2_grpc.MolinkServiceServicer):
             intermediate_tensors = await asyncio.to_thread(
                 deserialize_tensors, intermediate_tensors_bytes
             )
-            logger.info(
-                f"[MoLink][VE{virtual_engine}][WORKER] Deserialized {len(intermediate_tensors.tensors)} tensors"
-            )
+            # logger.info(
+            #     f"[MoLink][VE{virtual_engine}][WORKER] Deserialized {len(intermediate_tensors.tensors)} tensors"
+            # )
 
             # Execute the model step
-            logger.info(
-                f"[MoLink][VE{virtual_engine}][WORKER] Executing worker step..."
-            )
+            # logger.info(
+            #     f"[MoLink][VE{virtual_engine}][WORKER] Executing worker step..."
+            # )
             async with self.pp_lock:
                 result = await self.executor.execute_worker_step(
                     scheduler_output_bytes,
@@ -288,9 +288,9 @@ class MolinkService(molink_pb2_grpc.MolinkServiceServicer):
                     grpc_metadata,
                     virtual_engine,
                 )
-            logger.info(
-                f"[MoLink][VE{virtual_engine}][WORKER] Worker step completed, result type: {type(result).__name__}"
-            )
+            # logger.info(
+            #     f"[MoLink][VE{virtual_engine}][WORKER] Worker step completed, result type: {type(result).__name__}"
+            # )
 
             return molink_pb2.GrpcResponseData(res=1)
 

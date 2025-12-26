@@ -72,9 +72,9 @@ class TensorDeliveryProcess(mp.Process):
         ):
             """Deliver intermediate tensors to the next pipeline stage."""
             try:
-                logger.info(
-                    f"[MoLink][VE{virtual_engine}][DELIVERY] Starting deliver_intermediate_tensors to {next_server}"
-                )
+                # logger.info(
+                #     f"[MoLink][VE{virtual_engine}][DELIVERY] Starting deliver_intermediate_tensors to {next_server}"
+                # )
 
                 # Serialize tensors
                 grpc_tensors = molink_pb2.IntermediateTensors()
@@ -85,13 +85,13 @@ class TensorDeliveryProcess(mp.Process):
                     grpc_tensors.tensors.append(
                         molink_pb2.TensorEntry(key=key, tensor_data=tensor_bytes)
                     )
-                    logger.info(
-                        f"[MoLink][VE{virtual_engine}][DELIVERY] Serialized tensor '{key}': shape={tensor.shape}, size={len(tensor_bytes)} bytes"
-                    )
+                    # logger.info(
+                    #     f"[MoLink][VE{virtual_engine}][DELIVERY] Serialized tensor '{key}': shape={tensor.shape}, size={len(tensor_bytes)} bytes"
+                    # )
 
-                logger.info(
-                    f"[MoLink][VE{virtual_engine}][DELIVERY] Creating gRPC request..."
-                )
+                # logger.info(
+                #     f"[MoLink][VE{virtual_engine}][DELIVERY] Creating gRPC request..."
+                # )
                 request = molink_pb2.GrpcRequestData(
                     scheduler_output=scheduler_output_bytes,
                     intermediate_tensors=grpc_tensors,
@@ -99,14 +99,14 @@ class TensorDeliveryProcess(mp.Process):
                     virtual_engine=virtual_engine,
                 )
 
-                logger.info(
-                    f"[MoLink][VE{virtual_engine}][DELIVERY] Sending PushIntermediateTensors to {next_server}..."
-                )
+                # logger.info(
+                #     f"[MoLink][VE{virtual_engine}][DELIVERY] Sending PushIntermediateTensors to {next_server}..."
+                # )
                 stub = get_stub(next_server)
                 response = await stub.PushIntermediateTensors(request)
-                logger.info(
-                    f"[MoLink][VE{virtual_engine}][DELIVERY] PushIntermediateTensors completed, response: {response.res}"
-                )
+                # logger.info(
+                #     f"[MoLink][VE{virtual_engine}][DELIVERY] PushIntermediateTensors completed, response: {response.res}"
+                # )
 
             except Exception as e:
                 logger.error(
@@ -119,25 +119,25 @@ class TensorDeliveryProcess(mp.Process):
         ):
             """Deliver sampler output to the head node."""
             try:
-                logger.info(
-                    f"[MoLink][VE{virtual_engine}][DELIVERY] Starting deliver_sampler_output to {head_server}"
-                )
-                logger.info(
-                    f"[MoLink][VE{virtual_engine}][DELIVERY] Output size: {len(output_bytes)} bytes"
-                )
+                # logger.info(
+                #     f"[MoLink][VE{virtual_engine}][DELIVERY] Starting deliver_sampler_output to {head_server}"
+                # )
+                # logger.info(
+                #     f"[MoLink][VE{virtual_engine}][DELIVERY] Output size: {len(output_bytes)} bytes"
+                # )
 
                 request = molink_pb2.SamplerOutput(
                     output_data=output_bytes, virtual_engine=virtual_engine
                 )
 
-                logger.info(
-                    f"[MoLink][VE{virtual_engine}][DELIVERY] Sending PushSamplerOutput to {head_server}..."
-                )
+                # logger.info(
+                #     f"[MoLink][VE{virtual_engine}][DELIVERY] Sending PushSamplerOutput to {head_server}..."
+                # )
                 stub = get_stub(head_server)
                 response = await stub.PushSamplerOutput(request)
-                logger.info(
-                    f"[MoLink][VE{virtual_engine}][DELIVERY] PushSamplerOutput completed, response: {response.res}"
-                )
+                # logger.info(
+                #     f"[MoLink][VE{virtual_engine}][DELIVERY] PushSamplerOutput completed, response: {response.res}"
+                # )
 
             except Exception as e:
                 logger.error(f"[MoLink][DELIVERY] Error delivering sampler output: {e}")

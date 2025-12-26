@@ -369,32 +369,32 @@ class MolinkExecutor(MultiprocExecutor):
             scheduler_output_bytes = cloudpickle.dumps(
                 scheduler_output, protocol=pickle.HIGHEST_PROTOCOL
             )
-            logger.info(
-                f"[MoLink][VE{virtual_engine}] Serialized scheduler output: {len(scheduler_output_bytes)} bytes"
-            )
-            logger.info(
-                f"[MoLink][VE{virtual_engine}] Scheduler output: new_reqs={len(scheduler_output.scheduled_new_reqs)}, "
-                f"cached_reqs={len(scheduler_output.scheduled_cached_reqs.req_ids)}, "
-                f"total_tokens={scheduler_output.total_num_scheduled_tokens}"
-            )
+            # logger.info(
+            #     f"[MoLink][VE{virtual_engine}] Serialized scheduler output: {len(scheduler_output_bytes)} bytes"
+            # )
+            # logger.info(
+            #     f"[MoLink][VE{virtual_engine}] Scheduler output: new_reqs={len(scheduler_output.scheduled_new_reqs)}, "
+            #     f"cached_reqs={len(scheduler_output.scheduled_cached_reqs.req_ids)}, "
+            #     f"total_tokens={scheduler_output.total_num_scheduled_tokens}"
+            # )
 
             # Skip execution if no tokens to schedule
             if scheduler_output.total_num_scheduled_tokens == 0:
-                logger.info(
-                    f"[MoLink][VE{virtual_engine}] No tokens to schedule, skipping execution"
-                )
+                # logger.info(
+                #     f"[MoLink][VE{virtual_engine}] No tokens to schedule, skipping execution"
+                # )
                 # When total_tokens=0, it means:
                 # 1. Request just finished: finished_req_ids is non-empty, the final output
                 #    was already returned in the previous step
                 # 2. No active requests: both finished_req_ids and running requests are empty
                 # In both cases, we need to return an empty ModelRunnerOutput
-                if scheduler_output.finished_req_ids:
-                    logger.info(
-                        f"[MoLink][VE{virtual_engine}] Request(s) finished: {scheduler_output.finished_req_ids}"
-                    )
-                logger.info(
-                    f"[MoLink][VE{virtual_engine}] Returning empty ModelRunnerOutput"
-                )
+                # if scheduler_output.finished_req_ids:
+                #     logger.info(
+                #         f"[MoLink][VE{virtual_engine}] Request(s) finished: {scheduler_output.finished_req_ids}"
+                #     )
+                # logger.info(
+                #     f"[MoLink][VE{virtual_engine}] Returning empty ModelRunnerOutput"
+                # )
 
                 # Import ModelRunnerOutput here to avoid circular imports
                 from vllm.v1.outputs import ModelRunnerOutput
@@ -443,9 +443,9 @@ class MolinkExecutor(MultiprocExecutor):
             # Deserialize result
             if isinstance(output_bytes, bytes):
                 result = cloudpickle.loads(output_bytes)
-                logger.info(
-                    f"[MoLink][VE{virtual_engine}] Deserialized result: {type(result).__name__}"
-                )
+                # logger.info(
+                #     f"[MoLink][VE{virtual_engine}] Deserialized result: {type(result).__name__}"
+                # )
             else:
                 result = output_bytes
 
@@ -472,68 +472,68 @@ class MolinkExecutor(MultiprocExecutor):
         try:
             virtual_engine = getattr(scheduler_output, "virtual_engine", 0)
 
-            logger.info(f"[MoLink][VE{virtual_engine}][HEAD] Starting head execution")
+            # logger.info(f"[MoLink][VE{virtual_engine}][HEAD] Starting head execution")
 
             # Execute on local workers
             async with self.pp_lock:
-                logger.info(
-                    f"[MoLink][VE{virtual_engine}][HEAD] Calling _driver_exec_model"
-                )
+                # logger.info(
+                #     f"[MoLink][VE{virtual_engine}][HEAD] Calling _driver_exec_model"
+                # )
                 output = await self._driver_exec_model(scheduler_output)
-                logger.info(
-                    f"[MoLink][VE{virtual_engine}][HEAD] _driver_exec_model completed, output type: {type(output).__name__}"
-                )
+                # logger.info(
+                #     f"[MoLink][VE{virtual_engine}][HEAD] _driver_exec_model completed, output type: {type(output).__name__}"
+                # )
 
             server_list = grpc_metadata.get("server_list", [])
 
             # If this is the only node, put result directly in output queue
             if len(server_list) <= 1:
-                logger.info(
-                    f"[MoLink][VE{virtual_engine}][HEAD] Single node, putting result in output queue"
-                )
+                # logger.info(
+                #     f"[MoLink][VE{virtual_engine}][HEAD] Single node, putting result in output queue"
+                # )
                 # Serialize output for consistency
                 output_bytes = msgspec.json.encode(output)
                 await self.molink_service.output_queue[virtual_engine].put(output_bytes)
-                logger.info(
-                    f"[MoLink][VE{virtual_engine}][HEAD] Result placed in output queue"
-                )
+                # logger.info(
+                #     f"[MoLink][VE{virtual_engine}][HEAD] Result placed in output queue"
+                # )
                 return
 
             # Multi-node case: extract and send intermediate tensors
             next_server = server_list[1]
-            logger.info(
-                f"[MoLink][VE{virtual_engine}][HEAD] Multi-node, next server: {next_server}"
-            )
+            # logger.info(
+            #     f"[MoLink][VE{virtual_engine}][HEAD] Multi-node, next server: {next_server}"
+            # )
 
             # Get intermediate tensors
             if isinstance(output, IntermediateTensors):
                 intermediate_tensors = output.tensors
-                logger.info(
-                    f"[MoLink][VE{virtual_engine}][HEAD] Got IntermediateTensors with keys: {list(intermediate_tensors.keys())}"
-                )
+                # logger.info(
+                #     f"[MoLink][VE{virtual_engine}][HEAD] Got IntermediateTensors with keys: {list(intermediate_tensors.keys())}"
+                # )
             elif hasattr(output, "tensors"):
                 intermediate_tensors = output.tensors
-                logger.info(
-                    f"[MoLink][VE{virtual_engine}][HEAD] Got tensors from output.tensors with keys: {list(intermediate_tensors.keys())}"
-                )
+                # logger.info(
+                #     f"[MoLink][VE{virtual_engine}][HEAD] Got tensors from output.tensors with keys: {list(intermediate_tensors.keys())}"
+                # )
             else:
                 # Head node got ModelRunnerOutput - this means the request finished
                 # This can happen when there's a final empty decode step after request completion
-                logger.info(
-                    f"[MoLink][VE{virtual_engine}][HEAD] Got final output (non-intermediate), type: {type(output)}"
-                )
+                # logger.info(
+                #     f"[MoLink][VE{virtual_engine}][HEAD] Got final output (non-intermediate), type: {type(output)}"
+                # )
                 # Serialize using cloudpickle for consistency
                 output_bytes = cloudpickle.dumps(output)
                 await self.molink_service.output_queue[virtual_engine].put(output_bytes)
-                logger.info(
-                    f"[MoLink][VE{virtual_engine}][HEAD] Final output placed in queue"
-                )
+                # logger.info(
+                #     f"[MoLink][VE{virtual_engine}][HEAD] Final output placed in queue"
+                # )
                 return
 
             # Deliver to next node (async in background process)
-            logger.info(
-                f"[MoLink][VE{virtual_engine}][HEAD] Delivering {len(intermediate_tensors)} tensors to {next_server}"
-            )
+            # logger.info(
+            #     f"[MoLink][VE{virtual_engine}][HEAD] Delivering {len(intermediate_tensors)} tensors to {next_server}"
+            # )
             self.delivery_manager.deliver_to_next(
                 intermediate_tensors,
                 scheduler_output_bytes,
@@ -541,9 +541,9 @@ class MolinkExecutor(MultiprocExecutor):
                 virtual_engine,
                 next_server,
             )
-            logger.info(
-                f"[MoLink][VE{virtual_engine}][HEAD] Delivery initiated (async)"
-            )
+            # logger.info(
+            #     f"[MoLink][VE{virtual_engine}][HEAD] Delivery initiated (async)"
+            # )
 
         except Exception as e:
             logger.error(f"[MoLink][HEAD] Error in _executing_head_server: {e}")
@@ -565,21 +565,21 @@ class MolinkExecutor(MultiprocExecutor):
         """
         virtual_engine = getattr(scheduler_output, "virtual_engine", 0)
 
-        logger.info(
-            f"[MoLink][VE{virtual_engine}][DRIVER] Calling parent execute_model"
-        )
+        # logger.info(
+        #     f"[MoLink][VE{virtual_engine}][DRIVER] Calling parent execute_model"
+        # )
 
         # For MoLink: if we have intermediate_tensors, we need to pass them to workers
         # We'll use a custom approach: store them in model_runner before execution
         if intermediate_tensors is not None:
-            logger.info(
-                f"[MoLink][VE{virtual_engine}][DRIVER] Have intermediate tensors with {len(intermediate_tensors.tensors)} items"
-            )
+            # logger.info(
+            #     f"[MoLink][VE{virtual_engine}][DRIVER] Have intermediate tensors with {len(intermediate_tensors.tensors)} items"
+            # )
             # Store intermediate tensors in a way workers can access
             # Use collective_rpc with custom method to set intermediate tensors first
-            logger.info(
-                f"[MoLink][VE{virtual_engine}][DRIVER] Setting intermediate tensors on workers"
-            )
+            # logger.info(
+            #     f"[MoLink][VE{virtual_engine}][DRIVER] Setting intermediate tensors on workers"
+            # )
 
             # First, send intermediate tensors to all workers
             self.collective_rpc(
@@ -588,19 +588,19 @@ class MolinkExecutor(MultiprocExecutor):
             )
 
         # Now execute the model
-        logger.info(f"[MoLink][VE{virtual_engine}][DRIVER] Executing model on workers")
+        # logger.info(f"[MoLink][VE{virtual_engine}][DRIVER] Executing model on workers")
         future = super().execute_model(scheduler_output, non_block=True)
 
         # Wait for the Future to complete
-        logger.info(
-            f"[MoLink][VE{virtual_engine}][DRIVER] Waiting for execution to complete"
-        )
+        # logger.info(
+        #     f"[MoLink][VE{virtual_engine}][DRIVER] Waiting for execution to complete"
+        # )
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(None, future.result)
 
-        logger.info(
-            f"[MoLink][VE{virtual_engine}][DRIVER] Execution completed, result type: {type(result).__name__}"
-        )
+        # logger.info(
+        #     f"[MoLink][VE{virtual_engine}][DRIVER] Execution completed, result type: {type(result).__name__}"
+        # )
 
         return result
 
@@ -626,63 +626,63 @@ class MolinkExecutor(MultiprocExecutor):
             The output (intermediate tensors or final result).
         """
         try:
-            logger.info(
-                f"[MoLink][VE{virtual_engine}][WORKER_STEP] Starting execute_worker_step"
-            )
+            # logger.info(
+            #     f"[MoLink][VE{virtual_engine}][WORKER_STEP] Starting execute_worker_step"
+            # )
 
             # Deserialize scheduler output using cloudpickle
             scheduler_output = cloudpickle.loads(scheduler_output_bytes)
-            logger.info(
-                f"[MoLink][VE{virtual_engine}][WORKER_STEP] Deserialized scheduler output"
-            )
-            logger.info(
-                f"[MoLink][VE{virtual_engine}][WORKER_STEP] Scheduler output: new_reqs={len(scheduler_output.scheduled_new_reqs)}, "
-                f"cached_reqs={len(scheduler_output.scheduled_cached_reqs.req_ids)}, "
-                f"total_tokens={scheduler_output.total_num_scheduled_tokens}"
-            )
+            # logger.info(
+            #     f"[MoLink][VE{virtual_engine}][WORKER_STEP] Deserialized scheduler output"
+            # )
+            # logger.info(
+            #     f"[MoLink][VE{virtual_engine}][WORKER_STEP] Scheduler output: new_reqs={len(scheduler_output.scheduled_new_reqs)}, "
+            #     f"cached_reqs={len(scheduler_output.scheduled_cached_reqs.req_ids)}, "
+            #     f"total_tokens={scheduler_output.total_num_scheduled_tokens}"
+            # )
 
             # TODO: Set intermediate tensors on workers
             # This requires a mechanism to pass intermediate tensors to the model runner
             # For now, we'll rely on the model receiving them via a different path
-            logger.info(
-                f"[MoLink][VE{virtual_engine}][WORKER_STEP] Received {len(intermediate_tensors.tensors)} intermediate tensors"
-            )
+            # logger.info(
+            #     f"[MoLink][VE{virtual_engine}][WORKER_STEP] Received {len(intermediate_tensors.tensors)} intermediate tensors"
+            # )
 
             # Execute on local workers
-            logger.info(
-                f"[MoLink][VE{virtual_engine}][WORKER_STEP] Calling _driver_exec_model"
-            )
+            # logger.info(
+            #     f"[MoLink][VE{virtual_engine}][WORKER_STEP] Calling _driver_exec_model"
+            # )
             output = await self._driver_exec_model(
                 scheduler_output, intermediate_tensors
             )
-            logger.info(
-                f"[MoLink][VE{virtual_engine}][WORKER_STEP] _driver_exec_model completed, output type: {type(output).__name__}"
-            )
+            # logger.info(
+            #     f"[MoLink][VE{virtual_engine}][WORKER_STEP] _driver_exec_model completed, output type: {type(output).__name__}"
+            # )
 
             # If output is None, we need to call sample_tokens (for last stage)
             if output is None:
-                logger.info(
-                    f"[MoLink][VE{virtual_engine}][WORKER_STEP] Output is None, calling sample_tokens"
-                )
+                # logger.info(
+                #     f"[MoLink][VE{virtual_engine}][WORKER_STEP] Output is None, calling sample_tokens"
+                # )
                 # Call sample_tokens via collective_rpc
                 future = self.sample_tokens(None, non_block=True)
                 loop = asyncio.get_running_loop()
                 output = await loop.run_in_executor(None, future.result)
-                logger.info(
-                    f"[MoLink][VE{virtual_engine}][WORKER_STEP] sample_tokens completed, output type: {type(output).__name__}"
-                )
+                # logger.info(
+                #     f"[MoLink][VE{virtual_engine}][WORKER_STEP] sample_tokens completed, output type: {type(output).__name__}"
+                # )
 
             server_list = grpc_metadata.get("server_list", [])
-            logger.info(
-                f"[MoLink][VE{virtual_engine}][WORKER_STEP] Pipeline has {len(server_list)} nodes"
-            )
+            # logger.info(
+            #     f"[MoLink][VE{virtual_engine}][WORKER_STEP] Pipeline has {len(server_list)} nodes"
+            # )
 
             # Find my position in pipeline
             try:
                 my_idx = server_list.index(self.grpc_address)
-                logger.info(
-                    f"[MoLink][VE{virtual_engine}][WORKER_STEP] My position in pipeline: {my_idx}"
-                )
+                # logger.info(
+                #     f"[MoLink][VE{virtual_engine}][WORKER_STEP] My position in pipeline: {my_idx}"
+                # )
             except ValueError:
                 logger.error(
                     f"[MoLink][VE{virtual_engine}][WORKER_STEP] Node {self.grpc_address} not found in server list: {server_list}"
@@ -690,25 +690,25 @@ class MolinkExecutor(MultiprocExecutor):
                 return output
 
             is_last_stage = my_idx == len(server_list) - 1
-            logger.info(
-                f"[MoLink][VE{virtual_engine}][WORKER_STEP] Is last stage: {is_last_stage}"
-            )
+            # logger.info(
+            #     f"[MoLink][VE{virtual_engine}][WORKER_STEP] Is last stage: {is_last_stage}"
+            # )
 
             if is_last_stage:
                 # Send final output back to head node
                 head_server = grpc_metadata.get("head")
-                logger.info(
-                    f"[MoLink][VE{virtual_engine}][WORKER_STEP] Last stage, sending final output to head: {head_server}"
-                )
+                # logger.info(
+                #     f"[MoLink][VE{virtual_engine}][WORKER_STEP] Last stage, sending final output to head: {head_server}"
+                # )
 
                 # Check if output is ModelRunnerOutput
                 if isinstance(output, ModelRunnerOutput):
                     output_bytes = cloudpickle.dumps(
                         output, protocol=pickle.HIGHEST_PROTOCOL
                     )
-                    logger.info(
-                        f"[MoLink][VE{virtual_engine}][WORKER_STEP] Serialized ModelRunnerOutput: {len(output_bytes)} bytes"
-                    )
+                    # logger.info(
+                    #     f"[MoLink][VE{virtual_engine}][WORKER_STEP] Serialized ModelRunnerOutput: {len(output_bytes)} bytes"
+                    # )
                 else:
                     logger.error(
                         f"[MoLink][VE{virtual_engine}][WORKER_STEP] ERROR: Last stage output is not ModelRunnerOutput, type: {type(output)}"
@@ -721,36 +721,36 @@ class MolinkExecutor(MultiprocExecutor):
                 self.delivery_manager.deliver_to_head(
                     output_bytes, virtual_engine, head_server
                 )
-                logger.info(
-                    f"[MoLink][VE{virtual_engine}][WORKER_STEP] Final output delivery initiated"
-                )
+                # logger.info(
+                #     f"[MoLink][VE{virtual_engine}][WORKER_STEP] Final output delivery initiated"
+                # )
             else:
                 # Send intermediate tensors to next node
                 next_server = server_list[my_idx + 1]
-                logger.info(
-                    f"[MoLink][VE{virtual_engine}][WORKER_STEP] Intermediate stage, next server: {next_server}"
-                )
+                # logger.info(
+                #     f"[MoLink][VE{virtual_engine}][WORKER_STEP] Intermediate stage, next server: {next_server}"
+                # )
 
                 if isinstance(output, IntermediateTensors):
                     intermediate = output.tensors
-                    logger.info(
-                        f"[MoLink][VE{virtual_engine}][WORKER_STEP] Got IntermediateTensors with {len(intermediate)} items"
-                    )
+                    # logger.info(
+                    #     f"[MoLink][VE{virtual_engine}][WORKER_STEP] Got IntermediateTensors with {len(intermediate)} items"
+                    # )
                 elif hasattr(output, "tensors"):
                     intermediate = output.tensors
-                    logger.info(
-                        f"[MoLink][VE{virtual_engine}][WORKER_STEP] Got tensors from output with {len(intermediate)} items"
-                    )
+                    # logger.info(
+                    #     f"[MoLink][VE{virtual_engine}][WORKER_STEP] Got tensors from output with {len(intermediate)} items"
+                    # )
                 else:
                     intermediate = {"hidden_states": output}
-                    logger.info(
-                        f"[MoLink][VE{virtual_engine}][WORKER_STEP] Wrapping output in hidden_states"
-                    )
+                    # logger.info(
+                    #     f"[MoLink][VE{virtual_engine}][WORKER_STEP] Wrapping output in hidden_states"
+                    # )
 
                 # Serialize scheduler output for forwarding
-                logger.info(
-                    f"[MoLink][VE{virtual_engine}][WORKER_STEP] Delivering {len(intermediate)} tensors to {next_server}"
-                )
+                # logger.info(
+                #     f"[MoLink][VE{virtual_engine}][WORKER_STEP] Delivering {len(intermediate)} tensors to {next_server}"
+                # )
                 self.delivery_manager.deliver_to_next(
                     intermediate,
                     scheduler_output_bytes,
@@ -758,13 +758,13 @@ class MolinkExecutor(MultiprocExecutor):
                     virtual_engine,
                     next_server,
                 )
-                logger.info(
-                    f"[MoLink][VE{virtual_engine}][WORKER_STEP] Intermediate tensor delivery initiated"
-                )
+                # logger.info(
+                #     f"[MoLink][VE{virtual_engine}][WORKER_STEP] Intermediate tensor delivery initiated"
+                # )
 
-            logger.info(
-                f"[MoLink][VE{virtual_engine}][WORKER_STEP] execute_worker_step completed"
-            )
+            # logger.info(
+            #     f"[MoLink][VE{virtual_engine}][WORKER_STEP] execute_worker_step completed"
+            # )
             return output
 
         except Exception as e:

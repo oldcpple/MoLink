@@ -4,11 +4,11 @@ import time
 
 def start_subprocesses_concurrently(n):
     # curl 命令和参数
-    url = "http://localhost:8080/generate"
+    url = "http://0.0.0.0:8080/v1/completions"
     headers = {"Content-Type": "application/json"}
     data = {
         "prompt": "San Francisco is a",
-        "max_tokens": 30,
+        "max_tokens": 50,
         "temperature": 0
     }
     data_str = json.dumps(data)
@@ -44,8 +44,19 @@ def start_subprocesses_concurrently(n):
         print(f"运行出错: {e}")
 
 if __name__ == "__main__":
-    n = int(input("请输入要启动的子进程数量: "))
-    start_time = time.time()
-    start_subprocesses_concurrently(n)
-    end_time = time.time()
-    print(f"所有子进程完成，耗时: {end_time - start_time:.2f} 秒")
+    n = 100
+    runs = 5
+    times = []
+
+    for i in range(runs):
+        print(f"开始第 {i + 1} 次测试...")
+        start_time = time.time()
+        start_subprocesses_concurrently(n)
+        end_time = time.time()
+        duration = end_time - start_time
+        times.append(duration)
+        print(f"第 {i + 1} 次完成，耗时: {duration:.2f} 秒")
+        time.sleep(1)
+
+    avg = sum(times) / len(times) if times else 0.0
+    print(f"{runs} 次测试平均耗时: {avg:.2f} 秒")

@@ -64,9 +64,9 @@ class MolinkWorker(Worker):
             intermediate_tensors: Tensors from previous pipeline stage.
         """
         self._molink_intermediate_tensors = intermediate_tensors
-        logger.info(
-            f"[MoLink][Worker] Set intermediate tensors with {len(intermediate_tensors.tensors)} items"
-        )
+        # logger.info(
+        #     f"[MoLink][Worker] Set intermediate tensors with {len(intermediate_tensors.tensors)} items"
+        # )
 
     def _molink_get_intermediate_tensors(self) -> Optional[IntermediateTensors]:
         """Get and clear stored intermediate tensors for MoLink.
@@ -190,14 +190,14 @@ class MolinkWorker(Worker):
             if is_molink:
                 # For MoLink: get intermediate tensors from local storage
                 intermediate_tensors = self._molink_get_intermediate_tensors()
-                if intermediate_tensors:
-                    logger.info(
-                        f"[MoLink][Worker] Retrieved intermediate tensors with {len(intermediate_tensors.tensors)} items"
-                    )
-                else:
+                if not intermediate_tensors:
                     logger.warning(
                         f"[MoLink][Worker] No intermediate tensors found in local storage!"
                     )
+                # else:
+                #     logger.info(
+                #         f"[MoLink][Worker] Retrieved intermediate tensors with {len(intermediate_tensors.tensors)} items"
+                #     )
             else:
                 # Standard NCCL pipeline parallel
                 intermediate_tensors = IntermediateTensors(
@@ -222,15 +222,15 @@ class MolinkWorker(Worker):
             # Last stage should NOT return intermediate tensors here
             # Instead, return None to trigger sampling
             if get_pp_group().is_last_rank:
-                logger.info(
-                    f"[MoLink][Worker] Last stage, returning None to trigger sampling"
-                )
+                # logger.info(
+                #     f"[MoLink][Worker] Last stage, returning None to trigger sampling"
+                # )
                 return None
             else:
                 # Non-last stage: intermediate tensors will be sent via gRPC
-                logger.info(
-                    f"[MoLink][Worker] Intermediate stage, generated {len(output.tensors)} tensors, will be sent via gRPC"
-                )
+                # logger.info(
+                #     f"[MoLink][Worker] Intermediate stage, generated {len(output.tensors)} tensors, will be sent via gRPC"
+                # )
                 return output
         else:
             # Standard NCCL pipeline parallel
