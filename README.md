@@ -55,6 +55,11 @@ pip install -e .
 
 ### Distributed Deployment
 
+**NOTE:** if you are using GPUs with low compute capability(e.g. lower than sm80), please set the attn backend as follows:
+```bash
+export VLLM_ATTENTION_BACKEND=TRITON_ATTN
+```
+
 #### Example: Deploying Qwen3-14B on Two Servers
 
 **Server 1** (Layers 0-20):
