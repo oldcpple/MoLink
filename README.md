@@ -2,61 +2,144 @@
     <img src="resources/images/original.png" width="200" height="200">
 </div>
 
-# MoLink Project
+# MoLink: Distributed Large Language Model Serving System
 
-MoLink (***Mo***del-***Link***) is a distributed LLM serving system, aiming to achieve high performance LLM inference services with distributed computing resources that might spread over the Internet. You can also run MoLink over heterogeneous devices. 
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![vLLM 0.11.2](https://img.shields.io/badge/vLLM-0.11.2-green.svg)](https://github.com/vllm-project/vllm)
 
-## Installation Guide
+**MoLink** (***Mo***del-***Link***) is an advanced distributed LLM serving system designed to enable high-performance inference of large language models across geographically distributed and heterogeneous computing resources. By reconciling computation and communication overhead, MoLink delivers efficient LLM serving even when resources are spread across the Internet or connected via consumer-grade networks.
 
-MoLink is built on top of vLLM, and will manage to keep compatible with its latest version, currently we support vLLM **v0.9.1**. Please ensure that your server meets the requirements for running vLLM, refer to [this](https://docs.vllm.ai/en/latest/).
+## ✨ Key Features
 
-you can install MoLink with the following steps:
+- **🌐 Distributed Architecture**: Seamlessly deploy LLMs across multiple servers with automatic pipeline parallelism
+- **⚡ Optimized Communication**: Advanced pipeline management with overlapped computation and communication
+- **🎯 Heterogeneous Support**: Run on mixed GPU configurations with different compute capabilities
+- **🔄 Flexible Layer Partitioning**: Intelligent model splitting with customizable layer distribution
+- **🚀 High Throughput**: Batch processing with continuous batching for optimal resource utilization
+- **🔌 API Compatibility**: Full compatibility with vLLM and OpenAI API standards
+- **📊 Multi-Backend Support**: Works with various LLM architectures (LLaMA, Qwen, etc.)
 
-```shell
+## 🏗️ Architecture Overview
+
+MoLink v1 introduces a redesigned architecture with enhanced scalability and performance:
+
+- **Communication Layer**: gRPC-based efficient inter-node communication with DHT peer discovery
+- **Pipeline Management**: Intelligent request routing and activation transfer between stages
+- **Execution Engine**: Optimized model runner with KV cache management and attention mechanisms  
+- **Scheduler**: Advanced request scheduling with continuous batching support
+- **Worker Pool**: Distributed worker management with automatic load balancing
+
+## 📋 Prerequisites
+
+MoLink is built on top of **vLLM v0.11.2** and inherits its system requirements:
+
+- **GPU**: NVIDIA GPUs with compute capability 8.0+ (3090, etc.)
+- **CUDA**: Version 11.8 or higher
+- **Python**: Version 3.8 or higher
+
+For detailed vLLM requirements, refer to the [official documentation](https://docs.vllm.ai/en/latest/).
+
+## 🚀 Installation
+
+### Quick Installation
+
+```bash
 git clone https://github.com/oldcpple/MoLink.git
 cd MoLink
 pip install -e .
-pip install grpcio-tools==1.71.0 protobuf==5.29.0
 ```
 
-We need to perform additional processing for the installation of **grpcio-tools** and **protobuf**, because of the conflicts with vLLM dependencies.
 
-## Usage Guide
+## 📖 Usage Guide
 
-Once MoLink is successfully installed, you can follow this guide to deploy LLMs with GPU servers.
+### Distributed Deployment
 
-This is an example, assume that we have 2 servers and each with one GPU, and attempt to deploy a 70B LLaMA2 model. On the first server, simply run:
+#### Example: Deploying Qwen3-14B on Two Servers
 
-```shell
-python -m molink.entrypoints.api_server --model meta-llama/Llama-2-70b-chat-hf --port 8080 --dtype=half --max_model_len 4096 --serving_layers 0,39
+**Server 1** (Layers 0-20):
+
+```bash
+python -m molinkv1.entrypoints.api_server \
+    --model Qwen/Qwen3-14B \
+    --molink-enabled \
+    --molink-grpc-port 50061 \
+    --molink-start-layer 0 \
+    --molink-end-layer 20 \
+    --port 8080 \
+    --max-model-len 4096
 ```
 
-One important argument is ***serving_layers***, which claims the transformer layers this server will hold, please refer to ***config.json***  of your target model from Huggingface Hub to checkout how many layers it possesses in total before deciding how to split it (80 layers for 70B LLaMA2 in this example, we split it as 0-39 and 40-79 on two servers respectively). Unlike vLLM, you don't have to specify ***pipeline_parallel_size*** even though you have multiple nodes. Other arguments are inherited from vLLM and compatible with it.
+After startup, copy the gRPC address from the logs (e.g., `10.130.151.15:50061`).
 
-During startup, the first server will print logs like the following:
+**Server 2** (Layers 20-end):
 
-```shell
-DISTRIBUTED SERVICE INFO: MoLink gRPC server works at 172.17.0.17:50051
-DISTRIBUTED SERVICE INFO: If this is the first node of the swarm, you can copy the DHT INFO as the initial peer of following nodes
+```bash
+python -m molinkv1.entrypoints.api_server \
+    --model Qwen/Qwen3-14B \
+    --molink-enabled \
+    --molink-grpc-port 50062 \
+    --molink-start-layer 20 \
+    --molink-end-layer -1 \
+    --port 9095 \
+    --max-model-len 4096 \
+    --molink-initial-peer 10.130.151.15:50061
 ```
 
-Simply copy the first line, namely address of the communication server,  ***172.17.0.17:50051*** in this example, and use it as the ***initial_peer*** in the following command to start the second server:
+### Single-Node Deployment
 
-```shell
-python -m molink.entrypoints.api_server --model meta-llama/Llama-2-70b-chat-hf --port 9090 --dtype=half --max_model_len 4096 --serving_layers 40,79 --initial_peer 172.17.0.15:50051
+For single-node deployment, MoLink gracefully falls back to standard vLLM operation:
+
+```bash
+python -m molinkv1.entrypoints.api_server \
+    --model meta-llama/Llama-2-70b-chat-hf \
+    --port 8080 \
+    --dtype half \
+    --max-model-len 4096
 ```
 
-You can also serve the LLM with a single node, in this case the system falls back to vLLM:
+### Heterogeneous Deployment
 
-```shell
-python -m molink.entrypoints.api_server --model meta-llama/Llama-2-70b-chat-hf --port 8080 --dtype=half --max_model_len 4096
+MoLink supports heterogeneous clusters where different stages have varying tensor parallelism:
+
+```bash
+# Stage 1: 2 GPUs with layers 0-20
+CUDA_VISIBLE_DEVICES=0,1 python -m molinkv1.entrypoints.api_server \
+    --model meta-llama/Llama-2-70b-chat-hf \
+    --molink-enabled \
+    --tensor-parallel-size 2 \
+    --molink-start-layer 0 \
+    --molink-end-layer 20
+
+# Stage 2: 4 GPUs with layers 20-end
+CUDA_VISIBLE_DEVICES=0,1,2,3 python -m molinkv1.entrypoints.api_server \
+    --model meta-llama/Llama-2-70b-chat-hf \
+    --molink-enabled \
+    --tensor-parallel-size 4 \
+    --molink-start-layer 20 \
+    --molink-end-layer -1 \
+    --molink-initial-peer <first-node-address>
 ```
 
-For multi-GPU nodes, you can use multiple GPUs for tensor-parallel by specifying argument **--tensor_parallel_size**. It's also supported to run on a hybrid pipeline, for example, the tensor parallelism size of each stage can be different, and devices can be heterogeneous.
 
-The inference service usage are also compatible with vLLM's api server, for example you can simply run (change localhost to your server IP if you're not running at local ):
 
-```shell
+### Key Configuration Parameters
+
+| Parameter | Description | Example |
+|-----------|-------------|---------|
+| `--molink-enabled` | Enable distributed MoLink mode | - |
+| `--molink-grpc-port` | Port for inter-node communication | `50061` |
+| `--molink-start-layer` | Starting layer index (inclusive) | `0` |
+| `--molink-end-layer` | Ending layer index (exclusive, -1 for last) | `20` or `-1` |
+| `--molink-initial-peer` | Bootstrap peer address | `10.0.0.1:50061` |
+| `--tensor-parallel-size` | Number of GPUs for tensor parallelism | `2` |
+| `--max-model-len` | Maximum sequence length | `4096` |
+
+## 🔌 API Usage
+
+### Standard Generation API
+
+```bash
 curl http://localhost:8080/generate \
     -H "Content-Type: application/json" \
     -d '{
@@ -66,66 +149,87 @@ curl http://localhost:8080/generate \
     }'
 ```
 
-MoLink also supports OpenAI-Compatible servers,  you can start one with:
+### OpenAI-Compatible API
 
-```shell
-python -m molink.entrypoints.openai.api_server --model XXXXX (same as examples above)
+Start the OpenAI-compatible server:
+
+```bash
+python -m molinkv1.entrypoints.openai.api_server \
+    --model Qwen/Qwen3-14B \
+    --molink-enabled \
+    --molink-grpc-port 50061 \
+    --molink-start-layer 0 \
+    --molink-end-layer -1
 ```
 
-And access the API server like：
+Use with cURL:
 
-```
-curl http://localhost:8080/v1/completions \
+```bash
+curl http://localhost:8080/v1/chat/completions \
     -H "Content-Type: application/json" \
+    -H "Authorization: Bearer YOUR_API_KEY" \
     -d '{
-        "prompt": "San Francisco is a",
-        "max_tokens": 20,
-        "temperature": 0
+        "model": "Qwen/Qwen3-14B",
+        "messages": [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "Hello!"}
+        ],
+        "temperature": 0.7,
+        "max_tokens": 100
     }'
 ```
 
-or
+Use with OpenAI Python SDK:
 
 ```python
 from openai import OpenAI
+
 client = OpenAI(
     base_url="http://localhost:8080/v1",
-    api_key="token-abc123",
+    api_key="your-api-key-here"
 )
 
-completion = client.chat.completions.create(
-  model="meta-llama/Llama-2-70b-chat-hf",
-  messages=[
-    {"role": "user", "content": "Hello!"}
-  ]
+response = client.chat.completions.create(
+    model="Qwen/Qwen3-14B",
+    messages=[
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "Explain the theory of relativity."}
+    ],
+    temperature=0.7,
+    max_tokens=200
 )
 
-print(completion.choices[0].message)
+print(response.choices[0].message.content)
 ```
 
 
+## 📄 License
 
-## Supported Model Architectures:
+This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
 
-- **BaichuanForCausalLM**
-- **BloomForCausalLM**
-- **ChatGLMForCausalLM**
-- **CohereForCausalLM**
-- **DeepseekForCausalLM**
-- **DeepseekV2ForCausalLM**
-- **DeepseekV3ForCausalLM**
-- **FalconForCausalLM**
-- **GemmaForCausalLM**
-- **Gemma2ForCausalLM**
-- **GlmForCausalLM**
-- **GPT2LMHeadModel**
-- **LlamaForCausalLM**
-- **MambaForCausalLM**
-- **MixtralForCausalLM**
-- **PhiForCausalLM**
-- **Phi3ForCausalLM**
-- **QWenLMHeadModel**
-- **Qwen2MoeForCausalLM**
-- **Qwen2ForCausalLM**
-- **Qwen3MoeForCausalLM**
-- **Qwen3ForCausalLM**
+## 🙏 Acknowledgments
+
+MoLink is built upon the excellent [vLLM](https://github.com/vllm-project/vllm) project. We thank the vLLM team for their outstanding work on efficient LLM serving.
+
+## 📜 Citation
+
+If you find MoLink useful for your research or projects, please cite our paper:
+
+Lewei Jin, Kui Zhang, Yongqi Chen, Zhuoyifan, Renjie Li, Yi Gao, Bowei Yang, Zhengong Cai, and Wei Dong. Distributed LLM Serving on Consumer-Grade GPUs by Reconciling Computation and Communication. In *Findings of the Association for Computational Linguistics: EMNLP 2025*, pages 17633–17642, Suzhou, China, November 2025. Association for Computational Linguistics.
+
+```bibtex
+@inproceedings{jin-etal-2025-distributed,
+  title = {Distributed {LLM} Serving on Consumer-Grade {GPU}s by Reconciling Computation and Communication},
+  author = {Jin, Lewei and Zhang, Kui and Chen, Yongqi and Zhuoyifan and Li, Renjie and Gao, Yi and Yang, Bowei and Cai, Zhengong and Dong, Wei},
+  editor = {Christodoulopoulos, Christos and Chakraborty, Tanmoy and Rose, Carolyn and Peng, Violet},
+  booktitle = {Findings of the Association for Computational Linguistics: EMNLP 2025},
+  month = nov,
+  year = {2025},
+  address = {Suzhou, China},
+  publisher = {Association for Computational Linguistics},
+  pages = {17633--17642},
+  doi = {10.18653/v1/2025.findings-emnlp.957},
+  url = {https://aclanthology.org/2025.findings-emnlp.957/},
+  isbn = {979-8-89176-335-7}
+}
+```
