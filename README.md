@@ -92,7 +92,7 @@ For single-node deployment, MoLink gracefully falls back to standard vLLM operat
 
 ```bash
 python -m molinkv1.entrypoints.api_server \
-    --model meta-llama/Llama-2-70b-chat-hf \
+    --model Qwen/Qwen3-14B \
     --port 8080 \
     --dtype half \
     --max-model-len 4096
@@ -105,7 +105,7 @@ MoLink supports heterogeneous clusters where different stages have varying tenso
 ```bash
 # Stage 1: 2 GPUs with layers 0-20
 CUDA_VISIBLE_DEVICES=0,1 python -m molinkv1.entrypoints.api_server \
-    --model meta-llama/Llama-2-70b-chat-hf \
+    --model Qwen/Qwen3-32B \
     --molink-enabled \
     --tensor-parallel-size 2 \
     --molink-start-layer 0 \
@@ -113,7 +113,7 @@ CUDA_VISIBLE_DEVICES=0,1 python -m molinkv1.entrypoints.api_server \
 
 # Stage 2: 4 GPUs with layers 20-end
 CUDA_VISIBLE_DEVICES=0,1,2,3 python -m molinkv1.entrypoints.api_server \
-    --model meta-llama/Llama-2-70b-chat-hf \
+    --model Qwen/Qwen3-32B \
     --molink-enabled \
     --tensor-parallel-size 4 \
     --molink-start-layer 20 \
@@ -215,7 +215,7 @@ MoLink is built upon the excellent [vLLM](https://github.com/vllm-project/vllm) 
 
 If you find MoLink useful for your research or projects, please cite our paper:
 
-Lewei Jin, Kui Zhang, Yongqi Chen, Zhuoyifan, Renjie Li, Yi Gao, Bowei Yang, Zhengong Cai, and Wei Dong. Distributed LLM Serving on Consumer-Grade GPUs by Reconciling Computation and Communication. In *Findings of the Association for Computational Linguistics: EMNLP 2025*, pages 17633–17642, Suzhou, China, November 2025. Association for Computational Linguistics.
+
 
 ```bibtex
 @inproceedings{jin-etal-2025-distributed,
@@ -233,3 +233,14 @@ Lewei Jin, Kui Zhang, Yongqi Chen, Zhuoyifan, Renjie Li, Yi Gao, Bowei Yang, Zhe
   isbn = {979-8-89176-335-7}
 }
 ```
+
+```bibtex
+@misc{jin2025molinkdistributedefficientserving,
+      title={MoLink: Distributed and Efficient Serving Framework for Large Models}, 
+      author={Lewei Jin and Yongqi Chen and Kui Zhang and Yifan Zhuo and Yi Gao and Bowei Yang and Zhengong Cai and Wei Dong},
+      year={2025},
+      eprint={2507.05043},
+      archivePrefix={arXiv},
+      primaryClass={cs.DC},
+      url={https://arxiv.org/abs/2507.05043}, 
+}

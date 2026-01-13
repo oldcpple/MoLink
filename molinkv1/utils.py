@@ -63,7 +63,7 @@ def find_free_port(start_port: int = 50051, protocol: str = "tcp") -> int:
                 raise RuntimeError("No available port found")
 
 
-def get_grpc_options(max_message_size_mb: int = 200) -> List[Tuple[str, int]]:
+def get_grpc_options(max_message_size_mb: int = 200) -> List[Tuple[str, Any]]:
     """Get gRPC channel/server options.
 
     Args:
@@ -76,6 +76,8 @@ def get_grpc_options(max_message_size_mb: int = 200) -> List[Tuple[str, int]]:
     return [
         ("grpc.max_send_message_length", max_size),
         ("grpc.max_receive_message_length", max_size),
+        # Disable proxy to avoid connection issues
+        ("grpc.enable_http_proxy", 0),
     ]
 
 

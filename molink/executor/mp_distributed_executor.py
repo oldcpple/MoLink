@@ -53,7 +53,8 @@ class MultiprocessingDeliver(mp.Process):
             self.channel_to_next_server = aio.insecure_channel(next_server,
                                     options=[
                                         ('grpc.max_send_message_length', 200 * 1024 * 1024),  # 200MB
-                                        ('grpc.max_receive_message_length', 200 * 1024 * 1024)  # 200MB
+                                        ('grpc.max_receive_message_length', 200 * 1024 * 1024),  # 200MB
+                                        ('grpc.enable_http_proxy', 0),  # Disable proxy
                                     ])
 
         except Exception as e:
@@ -316,7 +317,10 @@ class MolinkMultiprocessingDistributedExecutor(MultiprocessingDistributedExecuto
             print("DISTRIBUTED SERVICE INFO: If this is the first node of the swarm, you can copy the GRPC INFO as the initial peer of following nodes")
             
             if initial_peer is not None and initial_peer != '': 
-                stub = comm_pb2_grpc.CommServiceStub(aio.insecure_channel(initial_peer))
+                stub = comm_pb2_grpc.CommServiceStub(aio.insecure_channel(
+                    initial_peer,
+                    options=[('grpc.enable_http_proxy', 0)]  # Disable proxy
+                ))
                 node_info = comm_pb2.NodeInfo(
                     ip = f'{self.ip}:{self.grpc_port}',
                     start_layer = start_layer,
@@ -344,7 +348,10 @@ class MolinkMultiprocessingDistributedExecutor(MultiprocessingDistributedExecuto
 
     def create_stubs(self, server_list):
         self.preset_server_list = server_list
-        self.stub_list = [comm_pb2_grpc.CommServiceStub(aio.insecure_channel(server)) for server in server_list]
+        self.stub_list = [comm_pb2_grpc.CommServiceStub(aio.insecure_channel(
+            server,
+            options=[('grpc.enable_http_proxy', 0)]  # Disable proxy
+        )) for server in server_list]
 
 
     async def execute_model_async(

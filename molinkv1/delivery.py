@@ -19,7 +19,7 @@ from molinkv1.utils import get_grpc_options, serialize_metadata
 
 logger = init_logger(__name__)
 
-
+mp.set_start_method('spawn', force=True)
 class TensorDeliveryProcess(mp.Process):
     """Background process for async tensor delivery.
 
@@ -40,7 +40,7 @@ class TensorDeliveryProcess(mp.Process):
         self.max_message_size_mb = max_message_size_mb
 
         # Queue for pending deliveries
-        self.delivery_queue: mp.Queue = mp.Queue(maxsize=100)
+        self.delivery_queue: mp.Queue = mp.Queue(maxsize=200)
 
         # Shutdown event
         self._shutdown = mp.Event()
@@ -272,10 +272,13 @@ class TensorDeliveryManager:
         )
 
     def deliver_to_head(
-        self, output_bytes: bytes, virtual_engine: int, head_server: str
+        self,
+        output_bytes: bytes,
+        virtual_engine: int,
+        head_server: str
     ):
         """Deliver sampler output to the head node.
-
+        
         Args:
             output_bytes: Serialized ModelRunnerOutput.
             virtual_engine: The virtual engine ID.
@@ -283,7 +286,8 @@ class TensorDeliveryManager:
         """
         if self._process is None:
             raise RuntimeError("Delivery process not started")
-
-        self._process.delivery_queue.put_nowait(
-            ("head", (output_bytes, virtual_engine, head_server))
-        )
+        
+        self._process.delivery_queue.put_nowait((
+            'head',
+            (output_bytes, virtual_engine, head_server)
+        ))
