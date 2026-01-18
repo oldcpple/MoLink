@@ -33,8 +33,7 @@ logger = init_logger(__name__)
 
 if TYPE_CHECKING:
     from vllm.model_executor.model_loader.tensorizer import TensorizerConfig
-    from vllm.v1.core.sched.output import SchedulerOutput
-
+from molinkv1.scheduler import MolinkSchedulerOutput
 
 class MolinkWorker(Worker):
     def __init__(
@@ -167,7 +166,7 @@ class MolinkWorker(Worker):
 
     @torch.inference_mode()
     def execute_model(
-        self, scheduler_output: "SchedulerOutput"
+        self, scheduler_output: "MolinkSchedulerOutput"
     ) -> ModelRunnerOutput | None:
         intermediate_tensors = None
         forward_pass = scheduler_output.total_num_scheduled_tokens > 0

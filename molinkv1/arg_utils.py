@@ -1,10 +1,24 @@
 import argparse
 import dataclasses
+from dataclasses import dataclass
+from typing import Optional
 from vllm.engine.arg_utils import AsyncEngineArgs
 from vllm.utils.argparse_utils import FlexibleArgumentParser
 
 
+@dataclass
 class MolinkEngineArgs(AsyncEngineArgs):
+    # MoLink-specific fields
+    molink_enabled: bool = False
+    molink_initial_peer: Optional[str] = None
+    molink_grpc_port: int = 0
+    molink_start_layer: int = 0
+    molink_end_layer: int = -1
+    molink_max_message_size_mb: int = 200
+    molink_connection_timeout_s: float = 30.0
+    molink_heartbeat_interval_s: float = 5.0
+    molink_enable_compression: bool = False
+    molink_num_delivery_workers: int = 2
 
     @classmethod
     def add_cli_args(cls, parser: FlexibleArgumentParser) -> FlexibleArgumentParser:
@@ -78,9 +92,5 @@ class MolinkEngineArgs(AsyncEngineArgs):
         engine_args = cls(
             **{attr: getattr(args, attr) for attr in attrs if hasattr(args, attr)}
         )
-        engine_args.molink_enabled = args.molink_enabled
-        engine_args.molink_initial_peer = args.molink_initial_peer
-        engine_args.molink_grpc_port = args.molink_grpc_port
-        engine_args.molink_start_layer = args.molink_start_layer
-        engine_args.molink_end_layer = args.molink_end_layer
         return engine_args
+

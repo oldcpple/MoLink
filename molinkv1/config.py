@@ -37,6 +37,10 @@ class MolinkConfig:
         heartbeat_interval_s: Interval for health check heartbeats.
         enable_compression: Whether to enable gRPC message compression.
         num_delivery_workers: Number of workers for async tensor delivery.
+        max_batch_num: Maximum number of micro-batches for pipeline parallelism.
+                      More batches can help hide communication latency but use more memory.
+        enable_micro_batch: Whether to enable micro-batch processing for overlapping
+                           computation and communication.
     """
 
     enabled: bool = False
@@ -49,6 +53,8 @@ class MolinkConfig:
     heartbeat_interval_s: float = 5.0
     enable_compression: bool = False
     num_delivery_workers: int = 2
+    max_batch_num: int = 4  # Maximum number of micro-batches (virtual engines)
+    enable_micro_batch: bool = True  # Enable micro-batch processing
 
     def __post_init__(self):
         if self.max_message_size_mb <= 0:
@@ -57,6 +63,8 @@ class MolinkConfig:
             raise ValueError("connection_timeout_s must be positive")
         if self.num_delivery_workers <= 0:
             raise ValueError("num_delivery_workers must be positive")
+        if self.max_batch_num < 1:
+            raise ValueError("max_batch_num must be at least 1")
 
     @property
     def is_head_node(self) -> bool:
@@ -71,6 +79,40 @@ class MolinkConfig:
     def get_serving_layers(self) -> tuple[int, int]:
         """Returns the range of layers this node serves."""
         return (self.start_layer, self.end_layer)
+    
+    def get_optimal_batch_num(self, num_requests: int, num_nodes: int) -> int:
+        """Calculate optimal number of micro-batches based on workload.
+        
+        The goal is to have enough batches to overlap computation with
+        communication, reducing pipeline bubbles.
+        
+        Args:
+            num_requests: Total number of active requests.
+            num_nodes: Number of nodes in the pipeline.
+            
+        Returns:
+            Optimal number of micro-batches.
+        """
+        if not self.enable_micro_batch:
+            return 1
+        
+        # Base heuristic: at least 2 batches for any multi-node setup
+        if num_nodes <= 1:
+            return 1
+        
+        # With more nodes, we need more batches to fill the pipeline
+        # and hide communication latency
+        base_batches = max(2, num_nodes)
+        
+        # Scale based on number of requests
+        # More requests = can benefit from more batches
+        if num_requests < 4:
+            return min(base_batches, 2)
+        elif num_requests < 16:
+            return min(base_batches, 3)
+        else:
+            return min(base_batches, self.max_batch_num)
+
 
 
 @dataclass

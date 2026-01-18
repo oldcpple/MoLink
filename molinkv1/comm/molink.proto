@@ -17,7 +17,7 @@ message IntermediateTensors {
 
 // Request data for pushing intermediate tensors to next stage
 message GrpcRequestData {
-    bytes scheduler_output = 1;  // Serialized SchedulerOutput
+    bytes scheduler_output = 1;  // Serialized MolinkSchedulerOutput
     IntermediateTensors intermediate_tensors = 2;
     bytes grpc_metadata = 3;  // JSON metadata about pipeline
     int32 virtual_engine = 4;
@@ -32,7 +32,7 @@ message GrpcResponseData {
 // Trigger request to start execution on a worker node
 message GrpcTriggerRequest {
     int32 virtual_engine = 1;
-    bytes scheduler_output = 2;  // Serialized SchedulerOutput for worker
+    bytes scheduler_output = 2;  // Serialized MolinkSchedulerOutput for worker
 }
 
 // Sampler output returned from the last stage
