@@ -147,7 +147,7 @@ class MolinkEngineArgs(AsyncEngineArgs):
 
         # Set default arguments for V0 or V1 Engine.
         if use_v1:
-            self._set_default_args_v1(usage_context)
+            self._set_default_args_v1(usage_context, model_config)
         else:
             self._set_default_args_v0(model_config)
 
