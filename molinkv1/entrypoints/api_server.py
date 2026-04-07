@@ -27,7 +27,7 @@ from vllm.utils.argparse_utils import FlexibleArgumentParser
 from vllm.utils.system_utils import set_ulimit
 from vllm.version import __version__ as VLLM_VERSION
 from molinkv1.arg_utils import MolinkEngineArgs
-from molinkv1.engine import MolinkEngine
+from molinkv1.engine.engine import MolinkEngine
 logger = init_logger("vllm.entrypoints.api_server")
 
 app = FastAPI()
