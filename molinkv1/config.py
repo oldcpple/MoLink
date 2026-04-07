@@ -88,10 +88,10 @@ class MolinkSchedulerConfig(SchedulerConfig):
     def get_scheduler_cls(self) -> type["SchedulerInterface"]:
         if self.scheduler_cls is None:
             if self.async_scheduling:
-                from molinkv1.scheduler import MolinkAsyncScheduler
+                from molinkv1.core.scheduler import MolinkAsyncScheduler
 
                 return MolinkAsyncScheduler
-            from molinkv1.scheduler import MolinkScheduler
+            from molinkv1.core.scheduler import MolinkScheduler
 
             return MolinkScheduler
 
