@@ -9,12 +9,11 @@ Usage:
 import asyncio
 import json
 import logging
-import math
 import os
+import random
 import signal
 import socket
 import subprocess
-import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -65,7 +64,7 @@ HEAD_URL = f"http://localhost:{HEAD_PORT}"
 TAIL_URL = f"http://localhost:{TAIL_PORT}"
 MAX_MODEL_LEN = 4096
 CONDA_PYTHON = "/opt/conda/envs/molink/bin/python"
-HEALTH_TIMEOUT = 300
+HEALTH_TIMEOUT = 600
 HEALTH_INTERVAL = 5
 REQUEST_TIMEOUT = 300
 TESTS_DIR = Path(__file__).parent
@@ -91,11 +90,11 @@ class BenchmarkConfig:
     # Concurrent: (concurrency, prompt_tokens, output_tokens)
     concurrent_tests: list[tuple[int, int, int]] = field(default_factory=lambda: [
         # output=64
-        (1, 128, 64), (5, 128, 64), (10, 128, 64), (20, 128, 64), (50, 128, 64),
+        (1, 128, 64), (5, 128, 64), (10, 128, 64), (20, 128, 64), (50, 128, 64), (100, 128, 64),
         # output=512
-        (1, 128, 512), (5, 128, 512), (10, 128, 512), (20, 128, 512), (50, 128, 512),
+        (1, 128, 512), (5, 128, 512), (10, 128, 512), (20, 128, 512), (50, 128, 512), (100, 128, 512),
         # output=1024
-        (1, 128, 1024), (5, 128, 1024), (10, 128, 1024),
+        (1, 128, 1024), (5, 128, 1024), (10, 128, 1024), (20, 128, 1024), (50, 128, 1024), (100, 128, 1024),
     ])
 
 
@@ -215,6 +214,143 @@ class SystemMetrics:
         }
 
 
+# ── Communication & Pipeline Metrics ───────────────────────────────────────
+
+
+@dataclass
+class CommMetrics:
+    gpu_to_cpu_ms: float = 0.0
+    serialize_ms: float = 0.0
+    grpc_push_intermediate_ms: float = 0.0
+    grpc_push_sampler_ms: float = 0.0
+    deserialize_ms: float = 0.0
+    head_compute_ms: float = 0.0
+    tail_compute_ms: float = 0.0
+    intermediate_bytes: int = 0
+    sampler_bytes: int = 0
+
+
+@dataclass
+class PipelineMetrics:
+    prompt_tokens: int = 0
+    output_tokens: int = 0
+    head_compute_ms: float = 0.0
+    tail_compute_ms: float = 0.0
+    gpu_to_cpu_ms: float = 0.0
+    serialize_ms: float = 0.0
+    grpc_push_intermediate_ms: float = 0.0
+    deserialize_ms: float = 0.0
+    grpc_push_sampler_ms: float = 0.0
+    total_comm_overhead_ms: float = 0.0
+    pipeline_overhead_pct: float = 0.0
+    stage_balance_ratio: float = 0.0
+    total_bytes: int = 0
+    bandwidth_mb_per_s: float = 0.0
+    e2e_latency_ms: float = 0.0
+
+
+def _aggregate_metrics(raw_service: list[dict], raw_delivery: list[dict]) -> CommMetrics:
+    """Aggregate raw metric dicts into a CommMetrics instance."""
+    cm = CommMetrics()
+    for m in raw_delivery:
+        t = m.get("type", "")
+        if t == "gpu_to_cpu":
+            cm.gpu_to_cpu_ms += m.get("copy_ms", 0)
+        elif t == "push_intermediate":
+            cm.serialize_ms += m.get("serialize_ms", 0)
+            cm.grpc_push_intermediate_ms += m.get("grpc_ms", 0)
+            cm.intermediate_bytes = max(cm.intermediate_bytes, m.get("bytes", 0))
+        elif t == "push_sampler":
+            cm.grpc_push_sampler_ms += m.get("grpc_ms", 0)
+            cm.sampler_bytes = max(cm.sampler_bytes, m.get("bytes", 0))
+    for m in raw_service:
+        t = m.get("type", "")
+        if t == "head_compute":
+            cm.head_compute_ms += m.get("compute_ms", 0)
+        elif t == "worker_step":
+            cm.deserialize_ms += m.get("deserialize_ms", 0)
+            cm.tail_compute_ms += m.get("compute_ms", 0)
+        elif t == "receive_intermediate":
+            cm.intermediate_bytes = max(cm.intermediate_bytes, m.get("bytes", 0))
+    return cm
+
+
+class CommMetricsCollector:
+    """Collects communication metrics from head and tail nodes."""
+
+    def __init__(self, head_url: str, tail_url: str):
+        self._head_url = head_url
+        self._tail_url = tail_url
+
+    async def reset(self, session: aiohttp.ClientSession):
+        for url in (self._head_url, self._tail_url):
+            try:
+                async with session.post(
+                    f"{url}/molink_metrics/reset",
+                    timeout=aiohttp.ClientTimeout(total=5),
+                ):
+                    pass
+            except Exception:
+                pass
+
+    async def collect(self, session: aiohttp.ClientSession) -> tuple[CommMetrics, CommMetrics]:
+        """Collect metrics from both nodes. Returns (head_metrics, tail_metrics)."""
+        results = []
+        for url in (self._head_url, self._tail_url):
+            try:
+                async with session.get(
+                    f"{url}/molink_metrics",
+                    timeout=aiohttp.ClientTimeout(total=5),
+                ) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        cm = _aggregate_metrics(
+                            data.get("service_metrics", []),
+                            data.get("delivery_metrics", []),
+                        )
+                    else:
+                        cm = CommMetrics()
+            except Exception:
+                cm = CommMetrics()
+            results.append(cm)
+        return results[0], results[1]
+
+    def compute_pipeline(
+        self, head: CommMetrics, tail: CommMetrics, e2e_ms: float,
+        prompt_tokens: int, output_tokens: int,
+    ) -> PipelineMetrics:
+        pm = PipelineMetrics(
+            prompt_tokens=prompt_tokens,
+            output_tokens=output_tokens,
+            head_compute_ms=head.head_compute_ms,
+            tail_compute_ms=tail.tail_compute_ms,
+            gpu_to_cpu_ms=head.gpu_to_cpu_ms,
+            serialize_ms=head.serialize_ms,
+            grpc_push_intermediate_ms=head.grpc_push_intermediate_ms,
+            deserialize_ms=tail.deserialize_ms,
+            grpc_push_sampler_ms=tail.grpc_push_sampler_ms,
+            total_bytes=head.intermediate_bytes + tail.sampler_bytes,
+            e2e_latency_ms=e2e_ms,
+        )
+        pm.total_comm_overhead_ms = (
+            pm.gpu_to_cpu_ms + pm.serialize_ms
+            + pm.grpc_push_intermediate_ms + pm.deserialize_ms
+            + pm.grpc_push_sampler_ms
+        )
+        total = pm.total_comm_overhead_ms + pm.head_compute_ms + pm.tail_compute_ms
+        pm.pipeline_overhead_pct = (
+            pm.total_comm_overhead_ms / total * 100 if total > 0 else 0
+        )
+        max_stage = max(pm.head_compute_ms, pm.tail_compute_ms)
+        min_stage = min(pm.head_compute_ms, pm.tail_compute_ms)
+        pm.stage_balance_ratio = min_stage / max_stage if max_stage > 0 else 1.0
+        grpc_time = pm.grpc_push_intermediate_ms + pm.grpc_push_sampler_ms
+        pm.bandwidth_mb_per_s = (
+            pm.total_bytes / 1024 / 1024 / (grpc_time / 1000) if grpc_time > 0 else 0
+        )
+        return pm
+
+
 # ── System Monitor ─────────────────────────────────────────────────────────
 
 
@@ -223,7 +359,7 @@ class SystemMonitor:
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._metrics = SystemMetrics()
-        self._gpus = gpus_to_monitor or [0, 1]
+        self._gpus = gpus_to_monitor or [1, 2]
         self._nvml_initialized = False
         self._prev_net = None
         self._prev_time = 0.0
@@ -293,32 +429,159 @@ class SystemMonitor:
 
 
 class PromptGenerator:
+    """Generates diverse, random prompts using tokenizer vocabulary and templates."""
+
+    TOPICS = {
+        "science": ["molecule", "experiment", "hypothesis", "reaction", "element",
+                     "quantum", "neutron", "protein", "genome", "catalyst",
+                     "particle", "spectrum", "velocity", "entropy", "synthesis"],
+        "technology": ["algorithm", "database", "network", "protocol", "interface",
+                       "compiler", "framework", "middleware", "container", "pipeline",
+                       "registry", "scheduler", "dispatcher", "encoder", "transformer"],
+        "history": ["civilization", "dynasty", "revolution", "empire", "artifact",
+                    "monument", "treaty", "colony", "parliament", "constitution",
+                    "renaissance", "pharaoh", "legion", "medieval", "feudal"],
+        "nature": ["ecosystem", "rainfall", "volcanic", "glacier", "coral",
+                   "migration", "predator", "habitat", "tundra", "plateau",
+                   "erosion", "canopy", "wetland", "reef", "savanna"],
+        "society": ["democracy", "legislation", "education", "migration", "community",
+                    "infrastructure", "institution", "regulation", "population", "economy",
+                    "commerce", "governance", "tradition", "heritage", "innovation"],
+    }
+
+    SENTENCE_TEMPLATES = [
+        "The {adj} {noun} {verb} {adv} during the {period}.",
+        "{noun_c} {verb} a {adj} {noun2} in {location}.",
+        "Research shows that {noun} can {verb} when {condition}.",
+        "The {noun} of {location} {verb} {adj} {noun2} in {period}.",
+        "{adj_c} {noun} {adv} {verb} the {noun2} of {noun3}.",
+        "In {period}, {noun_c} began to {verb} {adj} {noun2}.",
+        "The {noun} {verb} {adv} because the {noun2} {verb2} {adj}.",
+        "Scientists discovered that {adj} {noun} {verb} under {condition}.",
+        "The relationship between {noun} and {noun2} {verb} {adv}.",
+        "{noun_c} from {location} {verb} {adj} {noun2} for {noun3}.",
+        "Recent {noun} in {location} {verb} the {adj} {noun2}.",
+        "The {adj} {noun} of {location} {verb} {noun2} through {noun3}.",
+        "When {noun} {verb} {adv}, the {adj} {noun2} {verb2} to {noun3}.",
+        "A {adj} {noun} was {verb2} by {noun_c} in {location}.",
+        "The {noun} {verb} {adv} while {noun2} {verb2} the {noun3}.",
+        "Through {adj} {noun}, {noun_c} {verb} {noun2} across {location}.",
+        "The {noun} system {verb} {adj} {noun2} after {period}.",
+        "Analysis of {noun} reveals that {adj} {noun2} {verb} {adv}.",
+        "The development of {noun} {verb} {noun2} in {adj} ways during {period}.",
+        "{adj_c} {noun} and {noun2} {verb} together to form {noun3}.",
+    ]
+
+    ADJECTIVES = [
+        "significant", "complex", "ancient", "modern", "remarkable",
+        "fundamental", "emerging", "traditional", "innovative", "critical",
+        "subtle", "profound", "dynamic", "intricate", "unexpected",
+        "extensive", "compelling", "progressive", "conventional", "prominent",
+        "notable", "diverse", "extraordinary", "substantial", "elaborate",
+    ]
+
+    VERBS = [
+        "transformed", "revealed", "established", "influenced", "demonstrated",
+        "examined", "generated", "modified", "accelerated", "integrated",
+        "expanded", "reduced", "enhanced", "disrupted", "synthesized",
+        "explored", "challenged", "redefined", "illuminated", "facilitated",
+        "contributed", "revolutionized", "validated", "deteriorated", "emerged",
+    ]
+
+    ADVERBS = [
+        "rapidly", "gradually", "significantly", "unexpectedly",
+        "systematically", "indirectly", "consistently", "partially",
+        "substantially", "remarkably", "consequently", "simultaneously",
+    ]
+
+    PERIODS = [
+        "the 1990s", "recent years", "the 21st century", "the early period",
+        "the late century", "the modern era", "the post-war period",
+        "the 19th century", "the digital age", "the medieval period",
+    ]
+
+    LOCATIONS = [
+        "Europe", "Asia", "North America", "the region", "the area",
+        "the Pacific", "the Mediterranean", "the continent", "the highlands",
+        "the coastal zones", "the northern territories", "the southern basin",
+    ]
+
+    CONDITIONS = [
+        "exposed to light", "under pressure", "heated", "isolated", "combined",
+        "stimulated", "measured", "analyzed", "reproduced", "tested",
+    ]
+
     def __init__(self, model_path: str):
         self._tokenizer = None
-        self._base_text = (
-            "The history of artificial intelligence spans several decades, "
-            "with early research beginning in the 1950s. Since then, the field "
-            "has evolved through multiple waves of innovation, from expert systems "
-            "to deep learning. Modern language models represent a significant "
-            "breakthrough in natural language processing and generation. "
-        )
+        self._word_pool: list[str] = []
+        self._rng = random.Random(42)
+
         if TOKENIZER_AVAILABLE:
             try:
                 self._tokenizer = AutoTokenizer.from_pretrained(
                     model_path, trust_remote_code=True
                 )
-                logger.info("Tokenizer loaded from %s", model_path)
+                vocab = self._tokenizer.get_vocab()
+                words = [
+                    k[1:] for k in vocab
+                    if k.startswith('Ġ') and len(k) > 3
+                    and k[1:].isalpha() and k[1:].islower()
+                ]
+                self._word_pool = words
+                logger.info("Tokenizer loaded, word pool: %d words", len(words))
             except Exception as e:
                 logger.warning("Failed to load tokenizer: %s", e)
 
-    def generate_prompt(self, num_tokens: int) -> str:
+        if not self._word_pool:
+            self._word_pool = [w for ws in self.TOPICS.values() for w in ws]
+            logger.info("Using fallback word pool: %d words", len(self._word_pool))
+
+    def _fill_template(self) -> str:
+        rng = self._rng
+        template = rng.choice(self.SENTENCE_TEMPLATES)
+        wp = self._word_pool
+        return template.format(
+            adj=rng.choice(self.ADJECTIVES),
+            adj_c=rng.choice(self.ADJECTIVES).capitalize(),
+            noun=rng.choice(wp),
+            noun_c=rng.choice(wp).capitalize(),
+            noun2=rng.choice(wp),
+            noun3=rng.choice(wp),
+            verb=rng.choice(self.VERBS),
+            verb2=rng.choice(self.VERBS),
+            adv=rng.choice(self.ADVERBS),
+            period=rng.choice(self.PERIODS),
+            location=rng.choice(self.LOCATIONS),
+            condition=rng.choice(self.CONDITIONS),
+        )
+
+    def generate_prompt(self, num_tokens: int, seed: int | None = None) -> str:
+        if seed is not None:
+            self._rng = random.Random(seed)
         if self._tokenizer is not None:
-            tokens = self._tokenizer.encode(self._base_text)
-            repeats = math.ceil(num_tokens / len(tokens))
-            full_tokens = (tokens * repeats)[:num_tokens]
+            sentences = []
+            current_tokens = 0
+            while current_tokens < num_tokens:
+                sentence = self._fill_template()
+                tokens = self._tokenizer.encode(sentence)
+                sentences.append(sentence)
+                current_tokens += len(tokens)
+            full_text = " ".join(sentences)
+            full_tokens = self._tokenizer.encode(full_text)
+            if len(full_tokens) > num_tokens:
+                full_tokens = full_tokens[:num_tokens]
             return self._tokenizer.decode(full_tokens, skip_special_tokens=True)
-        text = self._base_text * math.ceil(num_tokens * 4 / len(self._base_text))
-        return text[: num_tokens * 4]
+        sentences = []
+        while sum(len(s.split()) for s in sentences) < num_tokens:
+            sentences.append(self._fill_template())
+        text = " ".join(sentences)
+        return text[:num_tokens * 4]
+
+    def generate_diverse_prompts(self, num_tokens: int, count: int) -> list[str]:
+        prompts = []
+        for i in range(count):
+            prompts.append(self.generate_prompt(num_tokens, seed=100 + i))
+        return prompts
 
     def count_tokens(self, text: str) -> int:
         if self._tokenizer is not None:
@@ -354,9 +617,11 @@ class ServiceManager:
             return False
 
     async def start_if_needed(self) -> bool:
+        """Always kill residual processes and restart fresh for clean benchmarks."""
         if await self.check_existing():
-            logger.info("Both services already running")
-            return True
+            logger.info("Services detected running — killing for a clean start")
+        else:
+            logger.info("No running services detected — starting fresh")
         return await self.start_services()
 
     def _kill_port_processes(self):
@@ -420,8 +685,8 @@ class ServiceManager:
             "--max-model-len", str(self._config.max_model_len),
         ]
         self._head_proc = subprocess.Popen(
-            head_cmd, env={**os.environ, "CUDA_VISIBLE_DEVICES": "0"},
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
+            head_cmd, env={**os.environ, "CUDA_VISIBLE_DEVICES": "1"},
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
         )
         self._managed = True
         if not await self._wait_for_healthy(HEAD_URL):
@@ -442,8 +707,8 @@ class ServiceManager:
             "--molink-initial-peer", f"{local_ip}:{self._config.head_grpc_port}",
         ]
         self._tail_proc = subprocess.Popen(
-            tail_cmd, env={**os.environ, "CUDA_VISIBLE_DEVICES": "1"},
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
+            tail_cmd, env={**os.environ, "CUDA_VISIBLE_DEVICES": "2"},
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
         )
         if not await self._wait_for_healthy(TAIL_URL):
             logger.error("Tail node failed to start")
@@ -827,18 +1092,128 @@ async def benchmark_concurrent(
     return results
 
 
+async def benchmark_communication(
+    session: aiohttp.ClientSession, pg: PromptGenerator,
+    comm_collector: CommMetricsCollector,
+) -> list[tuple[BenchmarkResult, CommMetrics, CommMetrics]]:
+    """Measure communication layer: single request per config, collect per-step metrics."""
+    results = []
+    prompt_sizes = [128, 512, 1024, 2048]
+    output_sizes = [64, 512]
+
+    for pt in prompt_sizes:
+        for ot in output_sizes:
+            name = f"comm_p{pt}_o{ot}"
+            logger.info("=== Communication (prompt=%d, output=%d) ===", pt, ot)
+
+            await comm_collector.reset(session)
+            await asyncio.sleep(0.3)
+
+            prompt = pg.generate_prompt(pt, seed=200 + pt + ot)
+            payload = {"prompt": prompt, "max_tokens": ot, "temperature": 0}
+            t0 = time.perf_counter()
+            m = await send_request(session, HEAD_URL, payload, 0, pt, pg)
+            t_total = time.perf_counter() - t0
+
+            await asyncio.sleep(0.5)
+            head_cm, tail_cm = await comm_collector.collect(session)
+
+            r = build_result(name, 1, pt, ot, [m], t_total)
+            results.append((r, head_cm, tail_cm))
+
+            logger.info(
+                "  %s | gpu2cpu=%.1fms ser=%.1fms grpc=%.1fms deser=%.1fms "
+                "| head=%.1fms tail=%.1fms | bytes=%d",
+                "OK" if m.success else m.error_message,
+                head_cm.gpu_to_cpu_ms, head_cm.serialize_ms,
+                head_cm.grpc_push_intermediate_ms, tail_cm.deserialize_ms,
+                head_cm.head_compute_ms, tail_cm.tail_compute_ms,
+                head_cm.intermediate_bytes,
+            )
+    return results
+
+
+async def benchmark_pipeline_breakdown(
+    session: aiohttp.ClientSession, config: BenchmarkConfig, pg: PromptGenerator,
+    comm_collector: CommMetricsCollector,
+) -> list[tuple[BenchmarkResult, PipelineMetrics]]:
+    """Full pipeline breakdown: per-stage compute, comm overhead, balance."""
+    results = []
+    # Prompt scaling
+    for pt in config.prompt_sizes_full:
+        name = f"pipeline_p{pt}_o64"
+        logger.info("=== Pipeline Breakdown (prompt=%d, output=64) ===", pt)
+
+        await comm_collector.reset(session)
+        await asyncio.sleep(0.3)
+
+        prompt = pg.generate_prompt(pt, seed=300 + pt)
+        payload = {"prompt": prompt, "max_tokens": 64, "temperature": 0}
+        t0 = time.perf_counter()
+        m = await send_request(session, HEAD_URL, payload, 0, pt, pg)
+        t_total = time.perf_counter() - t0
+        e2e_ms = m.e2e_latency_ms if m.success else (t_total * 1000)
+
+        await asyncio.sleep(0.5)
+        head_cm, tail_cm = await comm_collector.collect(session)
+        pm = comm_collector.compute_pipeline(head_cm, tail_cm, e2e_ms, pt, 64)
+
+        r = build_result(name, 1, pt, 64, [m], t_total)
+        results.append((r, pm))
+
+        logger.info(
+            "  %s | head=%.1fms comm=%.1fms tail=%.1fms | overhead=%.1f%% balance=%.2f",
+            "OK" if m.success else m.error_message,
+            pm.head_compute_ms, pm.total_comm_overhead_ms, pm.tail_compute_ms,
+            pm.pipeline_overhead_pct, pm.stage_balance_ratio,
+        )
+
+    # Output scaling
+    for ot in config.output_token_sizes:
+        name = f"pipeline_p128_o{ot}"
+        logger.info("=== Pipeline Breakdown (prompt=128, output=%d) ===", ot)
+
+        await comm_collector.reset(session)
+        await asyncio.sleep(0.3)
+
+        prompt = pg.generate_prompt(128, seed=400 + ot)
+        payload = {"prompt": prompt, "max_tokens": ot, "temperature": 0}
+        t0 = time.perf_counter()
+        m = await send_request(session, HEAD_URL, payload, 0, 128, pg)
+        t_total = time.perf_counter() - t0
+        e2e_ms = m.e2e_latency_ms if m.success else (t_total * 1000)
+
+        await asyncio.sleep(0.5)
+        head_cm, tail_cm = await comm_collector.collect(session)
+        pm = comm_collector.compute_pipeline(head_cm, tail_cm, e2e_ms, 128, ot)
+
+        r = build_result(name, 1, 128, ot, [m], t_total)
+        results.append((r, pm))
+
+        logger.info(
+            "  %s | head=%.1fms comm=%.1fms tail=%.1fms | overhead=%.1f%% bw=%.1fMB/s",
+            "OK" if m.success else m.error_message,
+            pm.head_compute_ms, pm.total_comm_overhead_ms, pm.tail_compute_ms,
+            pm.pipeline_overhead_pct, pm.bandwidth_mb_per_s,
+        )
+    return results
+
+
 # ── Report Generation ──────────────────────────────────────────────────────
 
 
 def generate_report(results: list[BenchmarkResult], sys_m: SystemMetrics | None,
-                    config: BenchmarkConfig) -> str:
+                    config: BenchmarkConfig,
+                    comm_data: list[tuple[BenchmarkResult, CommMetrics, CommMetrics]] | None = None,
+                    pipeline_data: list[tuple[BenchmarkResult, PipelineMetrics]] | None = None,
+                    ) -> str:
     L: list[str] = []
     L.append("=" * 80)
     L.append("  MoLink v1 Benchmark Report")
     L.append("=" * 80)
     L.append(f"Date:      {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     L.append(f"Model:     {config.model_path}")
-    L.append(f"Pipeline:  GPU 0 (layers 0-21) -> GPU 1 (layers 21-40)")
+    L.append(f"Pipeline:  GPU 1 (layers 0-21) -> GPU 2 (layers 21-40)")
     L.append(f"Max len:   {config.max_model_len}")
     L.append("")
 
@@ -924,12 +1299,56 @@ def generate_report(results: list[BenchmarkResult], sys_m: SystemMetrics | None,
                 )
         L.append("")
 
+    # Communication Layer
+    if comm_data:
+        L.append("--- Communication Layer Breakdown ---")
+        L.append(f"  {'Config':>14} | {'GPU-CPU':>7} | {'Ser':>7} | {'gRPC Push':>9} | "
+                 f"{'Deser':>7} | {'gRPC Out':>8} | {'Bytes':>8}")
+        L.append("  " + "-" * 80)
+        for r, head_cm, tail_cm in comm_data:
+            if r.successful_requests > 0:
+                cfg = f"p={r.prompt_tokens},o={r.max_tokens}"
+                L.append(
+                    f"  {cfg:>14} | {head_cm.gpu_to_cpu_ms:>6.1f}ms | "
+                    f"{head_cm.serialize_ms:>6.1f}ms | "
+                    f"{head_cm.grpc_push_intermediate_ms:>8.1f}ms | "
+                    f"{tail_cm.deserialize_ms:>6.1f}ms | "
+                    f"{tail_cm.grpc_push_sampler_ms:>7.1f}ms | "
+                    f"{head_cm.intermediate_bytes / 1024 / 1024:>7.1f}MB"
+                )
+            else:
+                cfg = f"p={r.prompt_tokens},o={r.max_tokens}"
+                L.append(f"  {cfg:>14} | FAILED")
+        L.append("")
+
+    # Pipeline Breakdown
+    if pipeline_data:
+        L.append("--- Pipeline Breakdown ---")
+        L.append(f"  {'Config':>14} | {'Head':>8} | {'Comm':>8} | {'Tail':>8} | "
+                 f"{'Overhead':>8} | {'Balance':>7} | {'BW(MB/s)':>8}")
+        L.append("  " + "-" * 80)
+        for r, pm in pipeline_data:
+            if r.successful_requests > 0:
+                cfg = f"p={pm.prompt_tokens},o={pm.output_tokens}"
+                L.append(
+                    f"  {cfg:>14} | {pm.head_compute_ms:>7.0f}ms | "
+                    f"{pm.total_comm_overhead_ms:>7.1f}ms | "
+                    f"{pm.tail_compute_ms:>7.0f}ms | "
+                    f"{pm.pipeline_overhead_pct:>7.1f}% | "
+                    f"{pm.stage_balance_ratio:>7.2f} | "
+                    f"{pm.bandwidth_mb_per_s:>8.1f}"
+                )
+            else:
+                cfg = f"p={pm.prompt_tokens},o={pm.output_tokens}"
+                L.append(f"  {cfg:>14} | FAILED")
+        L.append("")
+
     # System
     if sys_m:
         L.append("--- System Metrics ---")
         gs = sys_m.gpu_summary()
         for gid, g in sorted(gs.items()):
-            role = "Head (layers 0-21)" if gid == 0 else "Tail (layers 21-40)"
+            role = "Head (layers 0-21)" if gid == 1 else "Tail (layers 21-40)"
             L.append(f"  GPU {gid} ({role}): util avg={g['avg_util']:.1f}% max={g['max_util']:.1f}% "
                      f"| mem avg={g['avg_mem_pct']:.1f}% max={g['max_mem_pct']:.1f}%")
         cs = sys_m.cpu_summary()
@@ -948,7 +1367,10 @@ def generate_report(results: list[BenchmarkResult], sys_m: SystemMetrics | None,
 
 
 def save_json(results: list[BenchmarkResult], sys_m: SystemMetrics | None,
-              config: BenchmarkConfig, timestamp: str, report_text: str):
+              config: BenchmarkConfig, timestamp: str,
+              comm_data: list[tuple[BenchmarkResult, CommMetrics, CommMetrics]] | None = None,
+              pipeline_data: list[tuple[BenchmarkResult, PipelineMetrics]] | None = None,
+              ):
     out_file = TESTS_DIR / f"benchmark_results_{timestamp}.json"
     data: dict = {
         "timestamp": timestamp,
@@ -1011,6 +1433,49 @@ def save_json(results: list[BenchmarkResult], sys_m: SystemMetrics | None,
                 "error_message": m.error_message,
             })
 
+    # Communication metrics
+    if comm_data:
+        data["communication_metrics"] = []
+        for r, head_cm, tail_cm in comm_data:
+            data["communication_metrics"].append({
+                "test_name": r.test_name,
+                "prompt_tokens": r.prompt_tokens,
+                "max_tokens": r.max_tokens,
+                "success": r.successful_requests > 0,
+                "head": {
+                    "gpu_to_cpu_ms": round(head_cm.gpu_to_cpu_ms, 3),
+                    "serialize_ms": round(head_cm.serialize_ms, 3),
+                    "grpc_push_intermediate_ms": round(head_cm.grpc_push_intermediate_ms, 3),
+                    "head_compute_ms": round(head_cm.head_compute_ms, 3),
+                    "intermediate_bytes": head_cm.intermediate_bytes,
+                },
+                "tail": {
+                    "deserialize_ms": round(tail_cm.deserialize_ms, 3),
+                    "grpc_push_sampler_ms": round(tail_cm.grpc_push_sampler_ms, 3),
+                    "tail_compute_ms": round(tail_cm.tail_compute_ms, 3),
+                    "sampler_bytes": tail_cm.sampler_bytes,
+                },
+            })
+
+    # Pipeline metrics
+    if pipeline_data:
+        data["pipeline_metrics"] = []
+        for r, pm in pipeline_data:
+            data["pipeline_metrics"].append({
+                "test_name": r.test_name,
+                "prompt_tokens": pm.prompt_tokens,
+                "output_tokens": pm.output_tokens,
+                "success": r.successful_requests > 0,
+                "head_compute_ms": round(pm.head_compute_ms, 3),
+                "tail_compute_ms": round(pm.tail_compute_ms, 3),
+                "total_comm_overhead_ms": round(pm.total_comm_overhead_ms, 3),
+                "pipeline_overhead_pct": round(pm.pipeline_overhead_pct, 2),
+                "stage_balance_ratio": round(pm.stage_balance_ratio, 3),
+                "total_bytes": pm.total_bytes,
+                "bandwidth_mb_per_s": round(pm.bandwidth_mb_per_s, 2),
+                "e2e_latency_ms": round(pm.e2e_latency_ms, 2),
+            })
+
     # Raw system time series
     if sys_m:
         data["system_metrics"] = {
@@ -1043,14 +1508,19 @@ def save_json(results: list[BenchmarkResult], sys_m: SystemMetrics | None,
 
 class ChartGenerator:
     def __init__(self, results: list[BenchmarkResult], sys_m: SystemMetrics | None,
-                 config: BenchmarkConfig, timestamp: str):
+                 config: BenchmarkConfig, timestamp: str,
+                 comm_data: list[tuple[BenchmarkResult, CommMetrics, CommMetrics]] | None = None,
+                 pipeline_data: list[tuple[BenchmarkResult, PipelineMetrics]] | None = None,
+                 ):
         self._results = results
         self._sys = sys_m
         self._config = config
         self._ts = timestamp
         self._dir = TESTS_DIR
+        self._comm_data = comm_data or []
+        self._pipeline_data = pipeline_data or []
         self._colors_out = {64: "#1f77b4", 512: "#ff7f0e", 1024: "#2ca02c", 2048: "#d62728"}
-        self._colors_gpu = {0: "#1f77b4", 1: "#ff7f0e"}
+        self._colors_gpu = {1: "#1f77b4", 2: "#ff7f0e"}
 
     def generate_all(self):
         if not MATPLOTLIB_AVAILABLE:
@@ -1065,6 +1535,9 @@ class ChartGenerator:
         self._plot_concurrent_throughput()
         self._plot_gpu_utilization()
         self._plot_latency_heatmap()
+        self._plot_pipeline_breakdown()
+        self._plot_communication_scaling()
+        self._plot_pipeline_overhead()
         logger.info("Charts saved to %s", self._dir)
 
     def _save(self, fig, name: str):
@@ -1270,6 +1743,97 @@ class ChartGenerator:
         fig.tight_layout()
         self._save(fig, "latency_heatmap")
 
+    def _plot_pipeline_breakdown(self):
+        if not self._pipeline_data:
+            return
+        rows = [(r, pm) for r, pm in self._pipeline_data if r.successful_requests > 0]
+        if not rows:
+            return
+        fig, ax = plt.subplots(figsize=(12, 6))
+        labels = [f"p={pm.prompt_tokens}\no={pm.output_tokens}" for _, pm in rows]
+        x = np.arange(len(labels))
+        width = 0.6
+
+        head_vals = [pm.head_compute_ms for _, pm in rows]
+        comm_vals = [pm.total_comm_overhead_ms for _, pm in rows]
+        tail_vals = [pm.tail_compute_ms for _, pm in rows]
+
+        ax.bar(x, head_vals, width, label="Head Compute", color="#1f77b4")
+        ax.bar(x, comm_vals, width, bottom=head_vals, label="Comm Overhead", color="#ff7f0e")
+        ax.bar(x, tail_vals, width,
+               bottom=[h + c for h, c in zip(head_vals, comm_vals)],
+               label="Tail Compute", color="#2ca02c")
+
+        ax.set_xlabel("Configuration")
+        ax.set_ylabel("Time (ms)")
+        ax.set_title("Pipeline Breakdown: Compute vs Communication Overhead")
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels, fontsize=9)
+        ax.legend()
+        ax.grid(True, alpha=0.3, axis="y")
+        fig.tight_layout()
+        self._save(fig, "pipeline_breakdown")
+
+    def _plot_communication_scaling(self):
+        if not self._comm_data:
+            return
+        rows = [(r, h, t) for r, h, t in self._comm_data if r.successful_requests > 0]
+        if len(rows) < 2:
+            return
+        fig, ax = plt.subplots(figsize=(9, 5))
+
+        labels = [f"p={r.prompt_tokens},o={r.max_tokens}" for r, _, _ in rows]
+        gpu_cpu = [h.gpu_to_cpu_ms for _, h, _ in rows]
+        serialize = [h.serialize_ms for _, h, _ in rows]
+        grpc_push = [h.grpc_push_intermediate_ms for _, h, _ in rows]
+        deserialize = [t.deserialize_ms for _, _, t in rows]
+
+        x = np.arange(len(labels))
+        w = 0.2
+        ax.bar(x - 1.5 * w, gpu_cpu, w, label="GPU->CPU", color="#1f77b4")
+        ax.bar(x - 0.5 * w, serialize, w, label="Serialize", color="#ff7f0e")
+        ax.bar(x + 0.5 * w, grpc_push, w, label="gRPC Push", color="#2ca02c")
+        ax.bar(x + 1.5 * w, deserialize, w, label="Deserialize", color="#d62728")
+
+        ax.set_xlabel("Configuration")
+        ax.set_ylabel("Time (ms)")
+        ax.set_title("Communication Layer Breakdown by Configuration")
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels, fontsize=9, rotation=15)
+        ax.legend(fontsize=9)
+        ax.grid(True, alpha=0.3, axis="y")
+        fig.tight_layout()
+        self._save(fig, "communication_scaling")
+
+    def _plot_pipeline_overhead(self):
+        if not self._pipeline_data:
+            return
+        rows = [(r, pm) for r, pm in self._pipeline_data if r.successful_requests > 0]
+        if not rows:
+            return
+        fig, ax = plt.subplots(figsize=(10, 5))
+        labels = [f"p={pm.prompt_tokens},o={pm.output_tokens}" for _, pm in rows]
+        overheads = [pm.pipeline_overhead_pct for _, pm in rows]
+        x = np.arange(len(labels))
+
+        colors = ["#d62728" if o > 20 else "#ff7f0e" if o > 10 else "#2ca02c" for o in overheads]
+        ax.bar(x, overheads, color=colors, alpha=0.8)
+        ax.axhline(y=10, color="gray", linestyle="--", alpha=0.5, label="10% threshold")
+
+        for i, v in enumerate(overheads):
+            ax.text(i, v + 0.3, f"{v:.1f}%", ha="center", fontsize=9)
+
+        ax.set_xlabel("Configuration")
+        ax.set_ylabel("Communication Overhead (%)")
+        ax.set_title("Pipeline Communication Overhead Percentage")
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels, fontsize=9, rotation=15)
+        ax.legend()
+        ax.grid(True, alpha=0.3, axis="y")
+        ax.set_ylim(bottom=0)
+        fig.tight_layout()
+        self._save(fig, "pipeline_overhead")
+
 
 # ── Main ────────────────────────────────────────────────────────────────────
 
@@ -1277,12 +1841,14 @@ class ChartGenerator:
 async def main():
     config = BenchmarkConfig()
     all_results: list[BenchmarkResult] = []
+    comm_data: list[tuple[BenchmarkResult, CommMetrics, CommMetrics]] = []
+    pipeline_data: list[tuple[BenchmarkResult, PipelineMetrics]] = []
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     logger.info("=" * 60)
     logger.info("  MoLink v1 Benchmark  |  %s", timestamp)
     logger.info("  Model: %s", config.model_path)
-    logger.info("  Pipeline: layers 0-21 (GPU 0) / layers 21-40 (GPU 1)")
+    logger.info("  Pipeline: layers 0-21 (GPU 1) / layers 21-40 (GPU 2)")
     logger.info("  Output sizes: %s", config.output_token_sizes)
     logger.info("  Prompt sizes: %s", config.prompt_sizes_full)
     logger.info("  Concurrent tests: %d", len(config.concurrent_tests))
@@ -1290,6 +1856,7 @@ async def main():
 
     pg = PromptGenerator(config.model_path)
     svc = ServiceManager(config)
+    comm_collector = CommMetricsCollector(HEAD_URL, TAIL_URL)
     session: Optional[aiohttp.ClientSession] = None
     try:
         if not await svc.start_if_needed():
@@ -1310,6 +1877,13 @@ async def main():
             logger.error("Functional test failed. Abort.")
             return
 
+        # Prompt diversity check
+        diverse = pg.generate_diverse_prompts(128, 10)
+        unique = len(set(diverse))
+        logger.info("Prompt diversity: %d/10 unique prompts of 128 tokens", unique)
+        if unique < 8:
+            logger.warning("Low prompt diversity (%d/10 unique)!", unique)
+
         # Phase 2: Warmup
         await warmup(session, config.warmup_requests)
 
@@ -1322,23 +1896,35 @@ async def main():
         # Phase 5: TTFT
         all_results.extend(await benchmark_ttft(session, config, pg))
 
-        # Phase 6: Concurrent (with system monitoring)
+        # Phase 6: Communication layer benchmark
+        logger.info("=== Starting Communication Benchmarks ===")
+        comm_data = await benchmark_communication(session, pg, comm_collector)
+        all_results.extend([r for r, _, _ in comm_data])
+
+        # Phase 7: Pipeline breakdown
+        logger.info("=== Starting Pipeline Breakdown ===")
+        pipeline_data = await benchmark_pipeline_breakdown(session, config, pg, comm_collector)
+        all_results.extend([r for r, _ in pipeline_data])
+
+        # Phase 8: Concurrent (with system monitoring)
         logger.info("=== Starting Concurrent Benchmarks ===")
-        monitor = SystemMonitor(gpus_to_monitor=[0, 1])
+        monitor = SystemMonitor(gpus_to_monitor=[1, 2])
         monitor.start()
         await asyncio.sleep(1)
-        # benchmark_concurrent may replace session after OOM restart
         conc_results = await benchmark_concurrent(session, config, pg, svc)
         all_results.extend(conc_results)
         sys_m = monitor.stop()
 
         # Report
-        report_text = generate_report(all_results, sys_m, config)
+        report_text = generate_report(all_results, sys_m, config,
+                                      comm_data, pipeline_data)
         print("\n" + report_text)
-        save_json(all_results, sys_m, config, timestamp, report_text)
+        save_json(all_results, sys_m, config, timestamp,
+                  comm_data, pipeline_data)
 
         # Charts
-        ChartGenerator(all_results, sys_m, config, timestamp).generate_all()
+        ChartGenerator(all_results, sys_m, config, timestamp,
+                       comm_data, pipeline_data).generate_all()
 
     except Exception as e:
         logger.error("Benchmark failed: %s", e, exc_info=True)

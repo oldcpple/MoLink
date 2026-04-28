@@ -9,6 +9,7 @@ computation with communication.
 import asyncio
 import io
 import multiprocessing as mp
+import time
 import traceback
 from typing import Any, Dict, Optional
 import grpc.aio as aio
@@ -42,6 +43,9 @@ class TensorDeliveryProcess(mp.Process):
         # Queue for pending deliveries
         self.delivery_queue: mp.Queue = mp.Queue(maxsize=100)
 
+        # Queue for metrics output (read by parent process)
+        self.metrics_queue: mp.Queue = mp.Queue(maxsize=1000)
+
         # Shutdown event
         self._shutdown = mp.Event()
 
@@ -72,26 +76,21 @@ class TensorDeliveryProcess(mp.Process):
         ):
             """Deliver intermediate tensors to the next pipeline stage."""
             try:
-                # logger.info(
-                #     f"[MoLink][VE{virtual_engine}][DELIVERY] Starting deliver_intermediate_tensors to {next_server}"
-                # )
-
                 # Serialize tensors
                 grpc_tensors = molink_pb2.IntermediateTensors()
+                total_bytes = 0
+                t_ser_start = time.perf_counter()
                 for key, tensor in intermediate_tensors_cpu.items():
                     buffer = io.BytesIO()
                     torch.save(tensor, buffer)
                     tensor_bytes = buffer.getvalue()
+                    total_bytes += len(tensor_bytes)
                     grpc_tensors.tensors.append(
                         molink_pb2.TensorEntry(key=key, tensor_data=tensor_bytes)
                     )
-                    # logger.info(
-                    #     f"[MoLink][VE{virtual_engine}][DELIVERY] Serialized tensor '{key}': shape={tensor.shape}, size={len(tensor_bytes)} bytes"
-                    # )
+                t_ser_end = time.perf_counter()
+                serialize_ms = (t_ser_end - t_ser_start) * 1000
 
-                # logger.info(
-                #     f"[MoLink][VE{virtual_engine}][DELIVERY] Creating gRPC request..."
-                # )
                 request = molink_pb2.GrpcRequestData(
                     scheduler_output=scheduler_output_bytes,
                     intermediate_tensors=grpc_tensors,
@@ -99,14 +98,22 @@ class TensorDeliveryProcess(mp.Process):
                     virtual_engine=virtual_engine,
                 )
 
-                # logger.info(
-                #     f"[MoLink][VE{virtual_engine}][DELIVERY] Sending PushIntermediateTensors to {next_server}..."
-                # )
                 stub = get_stub(next_server)
+                t_grpc_start = time.perf_counter()
                 response = await stub.PushIntermediateTensors(request)
-                # logger.info(
-                #     f"[MoLink][VE{virtual_engine}][DELIVERY] PushIntermediateTensors completed, response: {response.res}"
-                # )
+                t_grpc_end = time.perf_counter()
+                grpc_ms = (t_grpc_end - t_grpc_start) * 1000
+
+                try:
+                    self.metrics_queue.put_nowait({
+                        "type": "push_intermediate",
+                        "serialize_ms": serialize_ms,
+                        "grpc_ms": grpc_ms,
+                        "bytes": total_bytes,
+                        "timestamp": time.time(),
+                    })
+                except Exception:
+                    pass
 
             except Exception as e:
                 logger.error(
@@ -119,25 +126,27 @@ class TensorDeliveryProcess(mp.Process):
         ):
             """Deliver sampler output to the head node."""
             try:
-                # logger.info(
-                #     f"[MoLink][VE{virtual_engine}][DELIVERY] Starting deliver_sampler_output to {head_server}"
-                # )
-                # logger.info(
-                #     f"[MoLink][VE{virtual_engine}][DELIVERY] Output size: {len(output_bytes)} bytes"
-                # )
+                sampler_bytes = len(output_bytes)
 
                 request = molink_pb2.SamplerOutput(
                     output_data=output_bytes, virtual_engine=virtual_engine
                 )
 
-                # logger.info(
-                #     f"[MoLink][VE{virtual_engine}][DELIVERY] Sending PushSamplerOutput to {head_server}..."
-                # )
                 stub = get_stub(head_server)
+                t_grpc_start = time.perf_counter()
                 response = await stub.PushSamplerOutput(request)
-                # logger.info(
-                #     f"[MoLink][VE{virtual_engine}][DELIVERY] PushSamplerOutput completed, response: {response.res}"
-                # )
+                t_grpc_end = time.perf_counter()
+                grpc_ms = (t_grpc_end - t_grpc_start) * 1000
+
+                try:
+                    self.metrics_queue.put_nowait({
+                        "type": "push_sampler",
+                        "grpc_ms": grpc_ms,
+                        "bytes": sampler_bytes,
+                        "timestamp": time.time(),
+                    })
+                except Exception:
+                    pass
 
             except Exception as e:
                 logger.error(f"[MoLink][DELIVERY] Error delivering sampler output: {e}")
@@ -256,7 +265,19 @@ class TensorDeliveryManager:
             raise RuntimeError("Delivery process not started")
 
         # Copy tensors to CPU for serialization in delivery process
+        t_copy_start = time.perf_counter()
         tensors_cpu = {k: v.to("cpu") for k, v in intermediate_tensors.items()}
+        t_copy_end = time.perf_counter()
+        copy_ms = (t_copy_end - t_copy_start) * 1000
+
+        try:
+            self._process.metrics_queue.put_nowait({
+                "type": "gpu_to_cpu",
+                "copy_ms": copy_ms,
+                "timestamp": time.time(),
+            })
+        except Exception:
+            pass
 
         self._process.delivery_queue.put_nowait(
             (
@@ -287,3 +308,15 @@ class TensorDeliveryManager:
         self._process.delivery_queue.put_nowait(
             ("head", (output_bytes, virtual_engine, head_server))
         )
+
+    def collect_metrics(self) -> list[dict]:
+        """Drain and return all accumulated metrics from the delivery process."""
+        if self._process is None:
+            return []
+        results = []
+        while not self._process.metrics_queue.empty():
+            try:
+                results.append(self._process.metrics_queue.get_nowait())
+            except Exception:
+                break
+        return results

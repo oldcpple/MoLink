@@ -13,8 +13,10 @@ Key design principles:
 """
 
 import asyncio
+import os
 import pickle
 import threading
+import time
 import traceback
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
@@ -454,7 +456,11 @@ class MolinkExecutor(MultiprocExecutor):
 
             # Execute on local workers
             async with self.pp_lock:
+                t_head_start = time.perf_counter()
                 output = await self._driver_exec_model(scheduler_output)
+            head_compute_ms = (time.perf_counter() - t_head_start) * 1000
+            self.molink_service.record_head_compute(head_compute_ms)
+            self._flush_metrics_to_file()
 
             server_list = grpc_metadata.get("server_list", [])
 
@@ -562,6 +568,7 @@ class MolinkExecutor(MultiprocExecutor):
             output = await self._driver_exec_model(
                 scheduler_output, intermediate_tensors
             )
+            self._flush_metrics_to_file()
             # If output is None, we need to call sample_tokens (for last stage)
             if output is None:
                 # Call sample_tokens via collective_rpc
@@ -662,6 +669,39 @@ class MolinkExecutor(MultiprocExecutor):
         super().shutdown()
 
         logger.info("MoLink executor shutdown complete")
+
+    def get_communication_metrics(self) -> dict:
+        """Get accumulated communication metrics from all components."""
+        return {
+            "service_metrics": self.molink_service.get_metrics() if self.molink_service else [],
+            "delivery_metrics": self.delivery_manager.collect_metrics() if self.delivery_manager else [],
+            "node": self.grpc_address,
+            "is_head": self.molink_config.is_head_node,
+        }
+
+    def reset_communication_metrics(self):
+        """Reset all communication metrics."""
+        if self.molink_service:
+            self.molink_service.reset_metrics()
+        # delivery metrics are drained on collect, no separate reset needed
+
+    def _flush_metrics_to_file(self):
+        """Write current metrics to a temp file for cross-process access.
+
+        Uses atomic write (write to tmp then os.replace) to avoid readers
+        seeing truncated JSON.
+        """
+        import json
+        import tempfile
+        data = self.get_communication_metrics()
+        path = os.path.join(tempfile.gettempdir(), f"molink_metrics_{self.grpc_port}.json")
+        try:
+            tmp_path = path + ".tmp"
+            with open(tmp_path, "w") as f:
+                json.dump(data, f)
+            os.replace(tmp_path, path)
+        except Exception:
+            pass
 
     async def _async_shutdown(self) -> None:
         """Async cleanup of gRPC resources."""

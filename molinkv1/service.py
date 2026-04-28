@@ -4,7 +4,10 @@ MoLink gRPC service implementation for cross-node pipeline parallelism.
 
 import asyncio
 import io
+import threading
+import time
 import traceback
+from collections import deque
 from typing import TYPE_CHECKING, Dict
 import torch
 from vllm.logger import init_logger
@@ -48,6 +51,10 @@ class MolinkService(molink_pb2_grpc.MolinkServiceServicer):
         self.executor = executor
         self.pipeline_size = pipeline_size
 
+        # Thread-safe metrics store
+        self._metrics_lock = threading.Lock()
+        self._metrics_deque: deque = deque(maxlen=2000)
+
         # Queues for inter-stage communication
         # input_queue: receives (scheduler_output, intermediate_tensors, grpc_metadata)
         # output_queue: receives final ModelRunnerOutput
@@ -61,6 +68,25 @@ class MolinkService(molink_pb2_grpc.MolinkServiceServicer):
         self.topology = PipelineTopology(head_ip, start_layer, end_layer)
 
         logger.info(f"MoLink service initialized for node {head_ip}")
+
+    def _record_metric(self, metric: dict):
+        with self._metrics_lock:
+            self._metrics_deque.append(metric)
+
+    def get_metrics(self) -> list[dict]:
+        with self._metrics_lock:
+            return list(self._metrics_deque)
+
+    def reset_metrics(self):
+        with self._metrics_lock:
+            self._metrics_deque.clear()
+
+    def record_head_compute(self, compute_ms: float):
+        self._record_metric({
+            "type": "head_compute",
+            "compute_ms": compute_ms,
+            "timestamp": time.time(),
+        })
 
     async def JoinPipeline(
         self, request: molink_pb2.NodeInfo, context
@@ -119,44 +145,23 @@ class MolinkService(molink_pb2_grpc.MolinkServiceServicer):
     async def PushIntermediateTensors(
         self, request: molink_pb2.GrpcRequestData, context
     ) -> molink_pb2.GrpcResponseData:
-        """Receive intermediate tensors from the previous pipeline stage.
-
-        Args:
-            request: GrpcRequestData containing scheduler output and tensors.
-            context: gRPC context.
-
-        Returns:
-            GrpcResponseData indicating success or failure.
-        """
+        """Receive intermediate tensors from the previous pipeline stage."""
+        t_start = time.perf_counter()
         try:
             virtual_engine = request.virtual_engine
-            # logger.info(
-            #     f"[MoLink][VE{virtual_engine}][SERVICE] PushIntermediateTensors called"
-            # )
 
-            # Store raw bytes for deferred deserialization
             scheduler_output_bytes = request.scheduler_output
-            # logger.info(
-            #     f"[MoLink][VE{virtual_engine}][SERVICE] Received scheduler output: {len(scheduler_output_bytes)} bytes"
-            # )
 
-            # Store tensor bytes (deserialization will be done in worker)
             intermediate_tensors_bytes = {}
+            total_bytes = 0
             for entry in request.intermediate_tensors.tensors:
                 key = entry.key
                 byte_data = entry.tensor_data
                 intermediate_tensors_bytes[key] = byte_data
-            # logger.info(
-            #     f"[MoLink][VE{virtual_engine}][SERVICE] Received {len(intermediate_tensors_bytes)} tensors"
-            # )
+                total_bytes += len(byte_data)
 
-            # Parse grpc metadata
             grpc_metadata = deserialize_metadata(request.grpc_metadata)
-            # logger.info(
-            #     f"[MoLink][VE{virtual_engine}][SERVICE] Parsed grpc metadata: {list(grpc_metadata.keys())}"
-            # )
 
-            # Put into input queue for processing
             await self.input_queue[virtual_engine].put(
                 (
                     scheduler_output_bytes,
@@ -164,9 +169,13 @@ class MolinkService(molink_pb2_grpc.MolinkServiceServicer):
                     grpc_metadata,
                 )
             )
-            # logger.info(
-            #     f"[MoLink][VE{virtual_engine}][SERVICE] Data placed in input queue (size: {self.input_queue[virtual_engine].qsize()})"
-            # )
+
+            self._record_metric({
+                "type": "receive_intermediate",
+                "bytes": total_bytes,
+                "duration_ms": (time.perf_counter() - t_start) * 1000,
+                "timestamp": time.time(),
+            })
 
             return molink_pb2.GrpcResponseData(res=1)
 
@@ -178,35 +187,18 @@ class MolinkService(molink_pb2_grpc.MolinkServiceServicer):
     async def PushSamplerOutput(
         self, request: molink_pb2.SamplerOutput, context
     ) -> molink_pb2.GrpcResponseData:
-        """Receive sampler output from the last pipeline stage.
-
-        This is called on the head node when the last stage completes
-        processing and has the final output.
-
-        Args:
-            request: SamplerOutput containing the model output.
-            context: gRPC context.
-
-        Returns:
-            GrpcResponseData indicating success or failure.
-        """
+        """Receive sampler output from the last pipeline stage."""
         try:
             virtual_engine = request.virtual_engine
-            # logger.info(
-            #     f"[MoLink][VE{virtual_engine}][SERVICE] PushSamplerOutput called"
-            # )
-
-            # Store raw bytes - will be deserialized by the executor
             output_bytes = request.output_data
-            # logger.info(
-            #     f"[MoLink][VE{virtual_engine}][SERVICE] Received sampler output: {len(output_bytes)} bytes"
-            # )
 
-            # Put into output queue for the head node to collect
             await self.output_queue[virtual_engine].put(output_bytes)
-            # logger.info(
-            #     f"[MoLink][VE{virtual_engine}][SERVICE] Output placed in queue (size: {self.output_queue[virtual_engine].qsize()})"
-            # )
+
+            self._record_metric({
+                "type": "receive_sampler",
+                "bytes": len(output_bytes),
+                "timestamp": time.time(),
+            })
 
             return molink_pb2.GrpcResponseData(res=1)
 
@@ -218,48 +210,22 @@ class MolinkService(molink_pb2_grpc.MolinkServiceServicer):
     async def ExecuteWorkerStep(
         self, request: molink_pb2.GrpcTriggerRequest, context
     ) -> molink_pb2.GrpcResponseData:
-        """Execute a forward step on this worker node.
-
-        This is called by the head node to trigger execution on worker nodes.
-        The worker should already have received intermediate tensors via
-        PushIntermediateTensors before this is called.
-
-        Args:
-            request: GrpcTriggerRequest containing the virtual engine ID.
-            context: gRPC context.
-
-        Returns:
-            GrpcResponseData indicating success or failure.
-        """
+        """Execute a forward step on this worker node."""
         try:
             virtual_engine = request.virtual_engine
-            # logger.info(
-            #     f"[MoLink][VE{virtual_engine}][WORKER] ExecuteWorkerStep called"
-            # )
 
-            # Get data from input queue (with timeout to detect issues)
-            # logger.info(
-            #     f"[MoLink][VE{virtual_engine}][WORKER] Waiting for data from input queue..."
-            # )
             try:
                 scheduler_output_bytes, intermediate_tensors_bytes, grpc_metadata = (
                     await asyncio.wait_for(
                         self.input_queue[virtual_engine].get(), timeout=10.0
                     )
                 )
-                # logger.info(
-                #     f"[MoLink][VE{virtual_engine}][WORKER] Got data from input queue: scheduler={len(scheduler_output_bytes)} bytes, tensors={len(intermediate_tensors_bytes)} items"
-                # )
             except asyncio.TimeoutError:
                 logger.error(
-                    f"[MoLink][VE{virtual_engine}][WORKER] TIMEOUT waiting for input queue! Queue size: {self.input_queue[virtual_engine].qsize()}"
+                    f"[MoLink][VE{virtual_engine}][WORKER] TIMEOUT waiting for input queue! "
+                    f"Queue size: {self.input_queue[virtual_engine].qsize()}"
                 )
                 raise
-
-            # Deserialize tensors in thread pool to not block event loop
-            # logger.info(
-            #     f"[MoLink][VE{virtual_engine}][WORKER] Deserializing tensors..."
-            # )
 
             def deserialize_tensors(
                 tensor_bytes: Dict[str, bytes],
@@ -270,17 +236,14 @@ class MolinkService(molink_pb2_grpc.MolinkServiceServicer):
                     tensors[key] = tensor
                 return IntermediateTensors(tensors=tensors)
 
+            t_deser_start = time.perf_counter()
             intermediate_tensors = await asyncio.to_thread(
                 deserialize_tensors, intermediate_tensors_bytes
             )
-            # logger.info(
-            #     f"[MoLink][VE{virtual_engine}][WORKER] Deserialized {len(intermediate_tensors.tensors)} tensors"
-            # )
+            t_deser_end = time.perf_counter()
+            deserialize_ms = (t_deser_end - t_deser_start) * 1000
 
-            # Execute the model step
-            # logger.info(
-            #     f"[MoLink][VE{virtual_engine}][WORKER] Executing worker step..."
-            # )
+            t_compute_start = time.perf_counter()
             async with self.pp_lock:
                 result = await self.executor.execute_worker_step(
                     scheduler_output_bytes,
@@ -288,9 +251,15 @@ class MolinkService(molink_pb2_grpc.MolinkServiceServicer):
                     grpc_metadata,
                     virtual_engine,
                 )
-            # logger.info(
-            #     f"[MoLink][VE{virtual_engine}][WORKER] Worker step completed, result type: {type(result).__name__}"
-            # )
+            t_compute_end = time.perf_counter()
+            compute_ms = (t_compute_end - t_compute_start) * 1000
+
+            self._record_metric({
+                "type": "worker_step",
+                "deserialize_ms": deserialize_ms,
+                "compute_ms": compute_ms,
+                "timestamp": time.time(),
+            })
 
             return molink_pb2.GrpcResponseData(res=1)
 

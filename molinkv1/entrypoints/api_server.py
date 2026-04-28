@@ -8,7 +8,9 @@ change `vllm/entrypoints/openai/api_server.py` instead.
 
 import asyncio
 import json
+import os
 import ssl
+import tempfile
 from argparse import Namespace
 from collections.abc import AsyncGenerator
 from typing import Any
@@ -38,6 +40,74 @@ engine = None
 async def health() -> Response:
     """Health check."""
     return Response(status_code=200)
+
+
+@app.get("/molink_metrics")
+async def get_molink_metrics() -> Response:
+    """Get communication layer metrics from the executor process."""
+    # The executor writes metrics to a temp file keyed by gRPC port.
+    # We can determine the gRPC port from the engine's molink config.
+    grpc_port = None
+    if engine is not None:
+        try:
+            vllm_config = getattr(engine, "vllm_config", None)
+            molink_config = getattr(vllm_config, "molink_config", None) if vllm_config else None
+            grpc_port = getattr(molink_config, "grpc_port", None) if molink_config else None
+        except Exception:
+            pass
+
+    if grpc_port:
+        path = os.path.join(tempfile.gettempdir(), f"molink_metrics_{grpc_port}.json")
+        try:
+            with open(path) as fh:
+                return JSONResponse(json.load(fh))
+        except FileNotFoundError:
+            return JSONResponse({"service_metrics": [], "delivery_metrics": [],
+                                 "node": None, "is_head": None})
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+    # Fallback: try any file (single-node case)
+    import glob
+    pattern = os.path.join(tempfile.gettempdir(), "molink_metrics_*.json")
+    files = glob.glob(pattern)
+    if not files:
+        return JSONResponse({"service_metrics": [], "delivery_metrics": [],
+                             "node": None, "is_head": None})
+    try:
+        with open(files[0]) as fh:
+            return JSONResponse(json.load(fh))
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/molink_metrics/reset")
+async def reset_molink_metrics() -> Response:
+    """Reset communication layer metrics by deleting this node's metrics file."""
+    grpc_port = None
+    if engine is not None:
+        try:
+            vllm_config = getattr(engine, "vllm_config", None)
+            molink_config = getattr(vllm_config, "molink_config", None) if vllm_config else None
+            grpc_port = getattr(molink_config, "grpc_port", None) if molink_config else None
+        except Exception:
+            pass
+
+    if grpc_port:
+        path = os.path.join(tempfile.gettempdir(), f"molink_metrics_{grpc_port}.json")
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+    else:
+        import glob
+        pattern = os.path.join(tempfile.gettempdir(), "molink_metrics_*.json")
+        for f in glob.glob(pattern):
+            try:
+                os.remove(f)
+            except Exception:
+                pass
+    return JSONResponse({"status": "ok"})
 
 
 @app.post("/generate")
