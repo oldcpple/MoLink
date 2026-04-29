@@ -119,9 +119,6 @@ class MolinkExecutor(MultiprocExecutor):
         # Thread pool for gRPC calls
         self._executor_pool = ThreadPoolExecutor(max_workers=10)
 
-        # Pipeline parallel lock (same as v0 implementation)
-        self.pp_lock: Optional[asyncio.Lock] = None
-
         # Worker tasks
         self.parallel_worker_tasks: Optional[asyncio.Task] = None
 
@@ -358,9 +355,6 @@ class MolinkExecutor(MultiprocExecutor):
             ModelRunnerOutput from the final pipeline stage.
         """
         try:
-            if self.pp_lock is None:
-                self.pp_lock = asyncio.Lock()
-
             # Get pipeline metadata
             grpc_metadata = self.molink_service.topology.get_metadata()
             server_list = grpc_metadata.get("server_list", [])
@@ -454,10 +448,9 @@ class MolinkExecutor(MultiprocExecutor):
         try:
             virtual_engine = getattr(scheduler_output, "virtual_engine", 0)
 
-            # Execute on local workers
-            async with self.pp_lock:
-                t_head_start = time.perf_counter()
-                output = await self._driver_exec_model(scheduler_output)
+            # Execute on local workers (no pp_lock — allow micro-batch overlap)
+            t_head_start = time.perf_counter()
+            output = await self._driver_exec_model(scheduler_output)
             head_compute_ms = (time.perf_counter() - t_head_start) * 1000
             self.molink_service.record_head_compute(head_compute_ms)
             self._flush_metrics_to_file()

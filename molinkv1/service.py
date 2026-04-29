@@ -51,7 +51,7 @@ class MolinkService(molink_pb2_grpc.MolinkServiceServicer):
         self.executor = executor
         self.pipeline_size = pipeline_size
 
-        # Thread-safe metrics store
+        # Thread-safe metrics store (no pp_lock — micro-batches overlap freely)
         self._metrics_lock = threading.Lock()
         self._metrics_deque: deque = deque(maxlen=2000)
 
@@ -60,9 +60,6 @@ class MolinkService(molink_pb2_grpc.MolinkServiceServicer):
         # output_queue: receives final ModelRunnerOutput
         self.input_queue = [asyncio.Queue() for _ in range(pipeline_size)]
         self.output_queue = [asyncio.Queue() for _ in range(pipeline_size)]
-
-        # Lock for pipeline execution
-        self.pp_lock = asyncio.Lock()
 
         # Pipeline topology
         self.topology = PipelineTopology(head_ip, start_layer, end_layer)
@@ -244,13 +241,12 @@ class MolinkService(molink_pb2_grpc.MolinkServiceServicer):
             deserialize_ms = (t_deser_end - t_deser_start) * 1000
 
             t_compute_start = time.perf_counter()
-            async with self.pp_lock:
-                result = await self.executor.execute_worker_step(
-                    scheduler_output_bytes,
-                    intermediate_tensors,
-                    grpc_metadata,
-                    virtual_engine,
-                )
+            result = await self.executor.execute_worker_step(
+                scheduler_output_bytes,
+                intermediate_tensors,
+                grpc_metadata,
+                virtual_engine,
+            )
             t_compute_end = time.perf_counter()
             compute_ms = (t_compute_end - t_compute_start) * 1000
 

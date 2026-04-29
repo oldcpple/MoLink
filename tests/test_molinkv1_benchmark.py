@@ -359,7 +359,7 @@ class SystemMonitor:
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._metrics = SystemMetrics()
-        self._gpus = gpus_to_monitor or [1, 2]
+        self._gpus = gpus_to_monitor or [2, 3]
         self._nvml_initialized = False
         self._prev_net = None
         self._prev_time = 0.0
@@ -685,7 +685,7 @@ class ServiceManager:
             "--max-model-len", str(self._config.max_model_len),
         ]
         self._head_proc = subprocess.Popen(
-            head_cmd, env={**os.environ, "CUDA_VISIBLE_DEVICES": "1"},
+            head_cmd, env={**os.environ, "CUDA_VISIBLE_DEVICES": "2"},
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
         )
         self._managed = True
@@ -707,7 +707,7 @@ class ServiceManager:
             "--molink-initial-peer", f"{local_ip}:{self._config.head_grpc_port}",
         ]
         self._tail_proc = subprocess.Popen(
-            tail_cmd, env={**os.environ, "CUDA_VISIBLE_DEVICES": "2"},
+            tail_cmd, env={**os.environ, "CUDA_VISIBLE_DEVICES": "3"},
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
         )
         if not await self._wait_for_healthy(TAIL_URL):
@@ -1213,7 +1213,7 @@ def generate_report(results: list[BenchmarkResult], sys_m: SystemMetrics | None,
     L.append("=" * 80)
     L.append(f"Date:      {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     L.append(f"Model:     {config.model_path}")
-    L.append(f"Pipeline:  GPU 1 (layers 0-21) -> GPU 2 (layers 21-40)")
+    L.append(f"Pipeline:  GPU 2 (layers 0-21) -> GPU 3 (layers 21-40)")
     L.append(f"Max len:   {config.max_model_len}")
     L.append("")
 
@@ -1348,7 +1348,7 @@ def generate_report(results: list[BenchmarkResult], sys_m: SystemMetrics | None,
         L.append("--- System Metrics ---")
         gs = sys_m.gpu_summary()
         for gid, g in sorted(gs.items()):
-            role = "Head (layers 0-21)" if gid == 1 else "Tail (layers 21-40)"
+            role = "Head (layers 0-21)" if gid == 2 else "Tail (layers 21-40)"
             L.append(f"  GPU {gid} ({role}): util avg={g['avg_util']:.1f}% max={g['max_util']:.1f}% "
                      f"| mem avg={g['avg_mem_pct']:.1f}% max={g['max_mem_pct']:.1f}%")
         cs = sys_m.cpu_summary()
@@ -1520,7 +1520,7 @@ class ChartGenerator:
         self._comm_data = comm_data or []
         self._pipeline_data = pipeline_data or []
         self._colors_out = {64: "#1f77b4", 512: "#ff7f0e", 1024: "#2ca02c", 2048: "#d62728"}
-        self._colors_gpu = {1: "#1f77b4", 2: "#ff7f0e"}
+        self._colors_gpu = {2: "#1f77b4", 3: "#ff7f0e"}
 
     def generate_all(self):
         if not MATPLOTLIB_AVAILABLE:
@@ -1848,7 +1848,7 @@ async def main():
     logger.info("=" * 60)
     logger.info("  MoLink v1 Benchmark  |  %s", timestamp)
     logger.info("  Model: %s", config.model_path)
-    logger.info("  Pipeline: layers 0-21 (GPU 1) / layers 21-40 (GPU 2)")
+    logger.info("  Pipeline: layers 0-21 (GPU 2) / layers 21-40 (GPU 3)")
     logger.info("  Output sizes: %s", config.output_token_sizes)
     logger.info("  Prompt sizes: %s", config.prompt_sizes_full)
     logger.info("  Concurrent tests: %d", len(config.concurrent_tests))
@@ -1908,7 +1908,7 @@ async def main():
 
         # Phase 8: Concurrent (with system monitoring)
         logger.info("=== Starting Concurrent Benchmarks ===")
-        monitor = SystemMonitor(gpus_to_monitor=[1, 2])
+        monitor = SystemMonitor(gpus_to_monitor=[2, 3])
         monitor.start()
         await asyncio.sleep(1)
         conc_results = await benchmark_concurrent(session, config, pg, svc)
