@@ -17,7 +17,7 @@ class MolinkEngineCoreProc(EngineCoreProc):
     
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        self.batch_queue_size = 2
+        self.batch_queue_size = 16
         if self.batch_queue_size >= 1:
             logger.info("Batch queue is enabled with max size %d", self.batch_queue_size)
             self.batch_queue = deque(maxlen=self.batch_queue_size)
@@ -54,8 +54,6 @@ class MolinkEngineCoreProc(EngineCoreProc):
     def step_with_static_micro_batch(
         self,
     ) -> tuple[dict[int, EngineCoreOutputs] | None, bool]:
-        
-        time.sleep(0.001)
 
         batch_queue = self.batch_queue
         assert batch_queue is not None
@@ -93,7 +91,6 @@ class MolinkEngineCoreProc(EngineCoreProc):
             # is non-empty.
             return None, False
 
-        print(len(batch_queue))
         future, scheduler_output = batch_queue.pop()
         with self.log_error_detail(scheduler_output):
             model_output = future.result()
