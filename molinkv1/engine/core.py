@@ -58,16 +58,11 @@ class MolinkEngineCoreProc(EngineCoreProc):
         batch_queue = self.batch_queue
         assert batch_queue is not None
 
-        # Try to schedule a new batch if the batch queue is not full, but
-        # the scheduler may return an empty batch if all requests are scheduled.
-        # Note that this is not blocking.
-
+        # Fill the queue: submit micro-batches while there's room
         model_executed = False
-        deferred_scheduler_output = None
         if self.scheduler.has_requests():
             total_num_scheduled_tokens = 0
             while len(batch_queue) < self.batch_queue_size:
-
                 scheduler_output = self.scheduler.schedule()
                 if not self.ec_producer:
                     total_num_scheduled_tokens += scheduler_output.total_num_scheduled_tokens
@@ -77,21 +72,33 @@ class MolinkEngineCoreProc(EngineCoreProc):
                         scheduler_output, non_block=True
                     )
                     batch_queue.appendleft((future, scheduler_output))
-                
                 else:
                     break
-            
+
             model_executed = total_num_scheduled_tokens > 0
-            if not model_executed:
+            if not model_executed and not batch_queue:
                 return None, False
 
         elif not batch_queue:
-            # Queue is empty. We should not reach here since this method should
-            # only be called when the scheduler contains requests or the queue
-            # is non-empty.
             return None, False
 
+        # Pop the oldest batch and wait for its result
         future, scheduler_output = batch_queue.pop()
+
+        # While waiting for this future, fill the queue with new micro-batches
+        # so the pipeline stays busy. We check future.done() to avoid blocking
+        # when the result is already available.
+        if not future.done() and self.scheduler.has_requests():
+            while len(batch_queue) < self.batch_queue_size:
+                sched_out = self.scheduler.schedule()
+                if sched_out.total_num_scheduled_tokens > 0:
+                    new_future = self.model_executor.execute_model(
+                        sched_out, non_block=True
+                    )
+                    batch_queue.appendleft((new_future, sched_out))
+                else:
+                    break
+
         with self.log_error_detail(scheduler_output):
             model_output = future.result()
 
