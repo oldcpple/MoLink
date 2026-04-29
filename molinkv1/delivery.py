@@ -9,10 +9,12 @@ computation with communication.
 import asyncio
 import io
 import multiprocessing as mp
+import struct
 import time
 import traceback
 from typing import Any, Dict, Optional
 import grpc.aio as aio
+import numpy as np
 import torch
 from vllm.logger import init_logger
 from molinkv1.comm import molink_pb2, molink_pb2_grpc
@@ -76,14 +78,31 @@ class TensorDeliveryProcess(mp.Process):
         ):
             """Deliver intermediate tensors to the next pipeline stage."""
             try:
-                # Serialize tensors
+                # Serialize tensors using raw bytes (no pickle overhead)
                 grpc_tensors = molink_pb2.IntermediateTensors()
                 total_bytes = 0
                 t_ser_start = time.perf_counter()
                 for key, tensor in intermediate_tensors_cpu.items():
-                    buffer = io.BytesIO()
-                    torch.save(tensor, buffer)
-                    tensor_bytes = buffer.getvalue()
+                    tensor = tensor.detach().cpu()
+                    # Store shape and torch dtype string
+                    shape = tensor.shape
+                    torch_dtype = str(tensor.dtype)  # e.g. "torch.bfloat16"
+                    if tensor.dtype == torch.bfloat16:
+                        t_bf = tensor.contiguous()
+                        if t_bf.dim() == 0:
+                            raw = t_bf.unsqueeze(0).view(dtype=torch.uint8).numpy().tobytes()
+                        else:
+                            raw = t_bf.view(dtype=torch.uint8).numpy().tobytes()
+                    else:
+                        raw = tensor.numpy().tobytes()
+                    elem_size = tensor.element_size()
+                    # Header: [ndim(4B)][shape(ndim*8B)][dtype_len(4B)][dtype_str][raw_data]
+                    header = struct.pack("<I", len(shape))
+                    for dim in shape:
+                        header += struct.pack("<Q", dim)
+                    dtype_bytes = torch_dtype.encode("ascii")
+                    header += struct.pack("<I", len(dtype_bytes)) + dtype_bytes
+                    tensor_bytes = header + raw
                     total_bytes += len(tensor_bytes)
                     grpc_tensors.tensors.append(
                         molink_pb2.TensorEntry(key=key, tensor_data=tensor_bytes)

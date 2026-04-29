@@ -4,11 +4,13 @@ MoLink gRPC service implementation for cross-node pipeline parallelism.
 
 import asyncio
 import io
+import struct
 import threading
 import time
 import traceback
 from collections import deque
 from typing import TYPE_CHECKING, Dict
+import numpy as np
 import torch
 from vllm.logger import init_logger
 from vllm.sequence import IntermediateTensors
@@ -228,8 +230,36 @@ class MolinkService(molink_pb2_grpc.MolinkServiceServicer):
                 tensor_bytes: Dict[str, bytes],
             ) -> IntermediateTensors:
                 tensors = {}
-                for key, byte_data in tensor_bytes.items():
-                    tensor = torch.load(io.BytesIO(byte_data), map_location="cuda")
+                for key, data in tensor_bytes.items():
+                    # Parse header: [ndim(4B)][shape(ndim*8B)][dtype_len(4B)][dtype_str][raw]
+                    offset = 0
+                    (ndim,) = struct.unpack_from("<I", data, offset)
+                    offset += 4
+                    shape = []
+                    for _ in range(ndim):
+                        (dim,) = struct.unpack_from("<Q", data, offset)
+                        shape.append(dim)
+                        offset += 8
+                    (dtype_len,) = struct.unpack_from("<I", data, offset)
+                    offset += 4
+                    dtype_name = data[offset : offset + dtype_len].decode("ascii")
+                    offset += dtype_len
+                    raw = data[offset:]
+                    if dtype_name == "torch.bfloat16":
+                        # raw bytes are uint8 view of bfloat16 data
+                        n_elements = 1
+                        for d in shape:
+                            n_elements *= d
+                        tensor = torch.frombuffer(
+                            raw, dtype=torch.uint8
+                        ).reshape(n_elements, 2).view(torch.bfloat16).reshape(
+                            tuple(shape)
+                        ).to("cuda")
+                    else:
+                        np_array = np.frombuffer(
+                            raw, dtype=np.dtype(dtype_name.replace("torch.", ""))
+                        ).reshape(tuple(shape))
+                        tensor = torch.from_numpy(np_array).to("cuda")
                     tensors[key] = tensor
                 return IntermediateTensors(tensors=tensors)
 
