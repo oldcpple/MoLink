@@ -18,6 +18,7 @@ import pickle
 import threading
 import time
 import traceback
+from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 import cloudpickle
@@ -38,6 +39,7 @@ from molinkv1.utils import (
 from molinkv1.parallel_state import (
     init_molink_parallel_state,
     destroy_molink_parallel_state,
+    is_molink_last_stage,
 )
 from molinkv1.comm import molink_pb2, molink_pb2_grpc
 
@@ -125,6 +127,11 @@ class MolinkExecutor(MultiprocExecutor):
         # Cached stubs for pipeline servers
         self._preset_server_list: List[str] = []
         self._stub_list: List[molink_pb2_grpc.MolinkServiceStub] = []
+
+        # Queue to pass scheduler_output from execute_model to sample_tokens
+        # for the multi-node head pipeline coordination.
+        self._scheduler_output_queue: deque = deque()
+
         # Initialize parent executor
         super().__init__(vllm_config, monitor_workers=monitor_workers)
 
@@ -135,6 +142,9 @@ class MolinkExecutor(MultiprocExecutor):
 
         # Initialize MoLink components
         self._init_molink()
+
+    def _is_molink_last_stage(self) -> bool:
+        return is_molink_last_stage()
 
     def _init_molink(self) -> None:
         """Initialize MoLink gRPC server and services."""
@@ -312,71 +322,60 @@ class MolinkExecutor(MultiprocExecutor):
     def execute_model(
         self, scheduler_output: "SchedulerOutput", non_block: bool = False
     ) -> ModelRunnerOutput | None | Future[ModelRunnerOutput | None]:
-        """Execute the model (main entry point).
+        """Execute the model on local workers.
 
-        For head node: orchestrates the distributed pipeline
-        For worker node: should not be called directly (uses service)
+        In vLLM 0.19+, execute_model stores state on workers and returns None.
+        sample_tokens is called separately to produce ModelRunnerOutput.
 
-        Args:
-            scheduler_output: The scheduler output.
-            non_block: Whether to return immediately with a Future.
-
-        Returns:
-            ModelRunnerOutput or Future[ModelRunnerOutput].
+        For the head node in multi-node mode, we store scheduler_output so
+        sample_tokens can send intermediate tensors to the next node.
         """
-        if not self.molink_config.is_head_node:
-            # Worker nodes shouldn't call this directly
-            # They receive triggers via gRPC service
-            return super().execute_model(scheduler_output, non_block)
+        if self.molink_config.is_head_node and not self._is_molink_last_stage():
+            # Multi-node head: stash scheduler_output for sample_tokens
+            if scheduler_output.total_num_scheduled_tokens > 0:
+                self._scheduler_output_queue.append(scheduler_output)
 
-        # Head node: orchestrate the pipeline
-        if non_block:
-            future = asyncio.run_coroutine_threadsafe(
-                self._execute_model_async(scheduler_output), self._event_loop
-            )
-            return future
-        else:
-            future = asyncio.run_coroutine_threadsafe(
-                self._execute_model_async(scheduler_output), self._event_loop
-            )
-            return future.result()
+        return super().execute_model(scheduler_output, non_block)
 
-    async def _execute_model_async(
-        self, scheduler_output: "SchedulerOutput"
-    ) -> ModelRunnerOutput:
-        """Execute the model across the distributed pipeline.
+    def sample_tokens(
+        self, grammar_output: Any, non_block: bool = False
+    ) -> ModelRunnerOutput | Future[ModelRunnerOutput]:
+        """Sample tokens or orchestrate cross-node pipeline.
 
-        This method orchestrates execution across all nodes in the pipeline.
-
-        Args:
-            scheduler_output: The scheduler output containing batch information.
-
-        Returns:
-            ModelRunnerOutput from the final pipeline stage.
+        vLLM 0.19 calls this after execute_model to get ModelRunnerOutput.
+        For multi-node head, we override to coordinate the pipeline:
+        1. Get intermediate tensors from local workers
+        2. Send to next node
+        3. Trigger worker execution
+        4. Wait for final result from last node
         """
-        try:
-            # Get pipeline metadata
-            grpc_metadata = self.molink_service.topology.get_metadata()
-            server_list = grpc_metadata.get("server_list", [])
+        if not (self.molink_config.is_head_node and not self._is_molink_last_stage()):
+            # Single-node or worker node: use parent's sample_tokens
+            return super().sample_tokens(grammar_output, non_block)
 
-            virtual_engine = getattr(scheduler_output, "virtual_engine", 0)
+        # Multi-node head: orchestrate cross-node pipeline
+        return self._sample_tokens_distributed(non_block)
 
-            # Serialize scheduler output using cloudpickle
-            scheduler_output_bytes = cloudpickle.dumps(
-                scheduler_output, protocol=pickle.HIGHEST_PROTOCOL
+    def _sample_tokens_distributed(
+        self, non_block: bool
+    ) -> ModelRunnerOutput | Future[ModelRunnerOutput]:
+        """Orchestrate cross-node pipeline and return final ModelRunnerOutput."""
+
+        async def _do_pipeline() -> ModelRunnerOutput:
+            scheduler_output = self._scheduler_output_queue.popleft()
+            loop = asyncio.get_running_loop()
+
+            # 1. Get intermediate tensors from local workers
+            results = await loop.run_in_executor(
+                None,
+                lambda: self.collective_rpc("_molink_get_intermediate_tensors"),
+            )
+            intermediate_tensors = (
+                results[0] if isinstance(results, list) else results
             )
 
-            # Skip execution if no tokens to schedule
-            if scheduler_output.total_num_scheduled_tokens == 0:
-                # When total_tokens=0, it means:
-                # 1. Request just finished: finished_req_ids is non-empty, the final output
-                #    was already returned in the previous step
-                # 2. No active requests: both finished_req_ids and running requests are empty
-                # In both cases, we need to return an empty ModelRunnerOutput
-
-                # Import ModelRunnerOutput here to avoid circular imports
-
-                empty_output = ModelRunnerOutput(
+            if intermediate_tensors is None:
+                return ModelRunnerOutput(
                     req_ids=[],
                     req_id_to_index={},
                     sampled_token_ids=[],
@@ -387,112 +386,52 @@ class MolinkExecutor(MultiprocExecutor):
                     ec_connector_output=None,
                     num_nans_in_logits=None,
                 )
-                return empty_output
 
-            # Execute on head node
-            head_task = asyncio.create_task(
-                self._executing_head_server(
-                    scheduler_output, scheduler_output_bytes, grpc_metadata
-                )
-            )
-
-            # Trigger execution on worker nodes (skip head node at index 0)
-            worker_servers = server_list[1:]
-            self._update_stub_list(worker_servers)
-
-            trigger_request = molink_pb2.GrpcTriggerRequest(
-                virtual_engine=virtual_engine
-            )
-
-            # Trigger all worker nodes asynchronously
-            # Wrap gRPC calls in async functions for create_task
-            async def trigger_worker(stub, request):
-                return await stub.ExecuteWorkerStep(request)
-
-            worker_tasks = [
-                asyncio.create_task(trigger_worker(stub, trigger_request))
-                for stub in self._stub_list
-            ]
-
+            # 2. Get pipeline metadata
+            grpc_metadata = self.molink_service.topology.get_metadata()
             server_list = grpc_metadata.get("server_list", [])
-
-            # Wait for result from output queue
-            output_bytes = await self.molink_service.output_queue[virtual_engine].get()
-
-            # Deserialize result
-            if isinstance(output_bytes, bytes):
-                result = cloudpickle.loads(output_bytes)
-            else:
-                result = output_bytes
-
-            return result
-
-        except Exception as e:
-            logger.error(f"Error in execute_model_async: {e}")
-            traceback.print_exc()
-            raise
-
-    async def _executing_head_server(
-        self,
-        scheduler_output: "SchedulerOutput",
-        scheduler_output_bytes: bytes,
-        grpc_metadata: Dict[str, Any],
-    ) -> None:
-        """Execute model on the head node and handle results.
-
-        Args:
-            scheduler_output: The scheduler output.
-            scheduler_output_bytes: Serialized scheduler output (pickle format).
-            grpc_metadata: Pipeline metadata.
-        """
-        try:
             virtual_engine = getattr(scheduler_output, "virtual_engine", 0)
 
-            # Execute on local workers (no pp_lock — allow micro-batch overlap)
-            t_head_start = time.perf_counter()
-            output = await self._driver_exec_model(scheduler_output)
-            head_compute_ms = (time.perf_counter() - t_head_start) * 1000
-            self.molink_service.record_head_compute(head_compute_ms)
-            self._flush_metrics_to_file()
+            # 3. Serialize scheduler_output
+            scheduler_output_bytes = cloudpickle.dumps(
+                scheduler_output, protocol=pickle.HIGHEST_PROTOCOL
+            )
 
-            server_list = grpc_metadata.get("server_list", [])
-
-            # If this is the only node, we do sampling here and put the result directly in the output queue
-            if len(server_list) <= 1:
-                future = self.sample_tokens(None, non_block=True)
-                loop = asyncio.get_running_loop()
-                output = await loop.run_in_executor(None, future.result)
-                output_bytes = cloudpickle.dumps(output)
-                await self.molink_service.output_queue[virtual_engine].put(output_bytes)
-                return
-
-            # Multi-node case: extract and send intermediate tensors
+            # 4. Send intermediate tensors to next node
             next_server = server_list[1]
-
-            # Get intermediate tensors
-            if isinstance(output, IntermediateTensors):
-                intermediate_tensors = output.tensors
-            elif hasattr(output, "tensors"):
-                intermediate_tensors = output.tensors
-            else:
-                # Head node got ModelRunnerOutput - this means the request finished
-                # This can happen when there's a final empty decode step after request completion
-                # Serialize using cloudpickle for consistency
-                output_bytes = cloudpickle.dumps(output)
-                await self.molink_service.output_queue[virtual_engine].put(output_bytes)
-                return
-
             self.delivery_manager.deliver_to_next(
-                intermediate_tensors,
+                intermediate_tensors.tensors,
                 scheduler_output_bytes,
                 grpc_metadata,
                 virtual_engine,
                 next_server,
             )
 
-        except Exception as e:
-            logger.error(f"[MoLink][HEAD] Error in _executing_head_server: {e}")
-            traceback.print_exc()
+            # 5. Trigger worker nodes
+            worker_servers = server_list[1:]
+            self._update_stub_list(worker_servers)
+            trigger_request = molink_pb2.GrpcTriggerRequest(
+                virtual_engine=virtual_engine
+            )
+
+            for stub in self._stub_list:
+                asyncio.create_task(stub.ExecuteWorkerStep(trigger_request))
+
+            # 6. Wait for final result from output_queue
+            output_bytes = await self.molink_service.output_queue[
+                virtual_engine
+            ].get()
+
+            self._flush_metrics_to_file()
+            return cloudpickle.loads(output_bytes)
+
+        future = asyncio.run_coroutine_threadsafe(
+            _do_pipeline(), self._event_loop
+        )
+        if non_block:
+            return future
+        else:
+            return future.result()
 
     async def _driver_exec_model(
         self,
@@ -526,6 +465,14 @@ class MolinkExecutor(MultiprocExecutor):
         # Wait for the Future to complete
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(None, future.result)
+
+        if result is None and not self._is_molink_last_stage():
+            results = self.collective_rpc("_molink_get_intermediate_tensors")
+            if isinstance(results, list):
+                result = results[0]
+            else:
+                result = results
+
         return result
 
     async def execute_worker_step(

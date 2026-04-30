@@ -135,9 +135,6 @@ def get_molink_pp_indices(
         start_layer = 0
         end_layer = num_hidden_layers
 
-    print('*'*100)
-    print(start_layer, end_layer)
-
     return start_layer, end_layer
 
 
