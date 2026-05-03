@@ -29,6 +29,7 @@ from vllm.utils.argparse_utils import FlexibleArgumentParser
 from vllm.utils.system_utils import set_ulimit
 from vllm.version import __version__ as VLLM_VERSION
 from molinkv1.arg_utils import MolinkEngineArgs
+from molinkv1.config import MolinkConfig
 from molinkv1.engine.engine import MolinkEngine
 logger = init_logger("vllm.entrypoints.api_server")
 
@@ -177,13 +178,31 @@ async def init_app(
     global engine
 
     engine_args = MolinkEngineArgs.from_cli_args(args)
-    engine = (
-        llm_engine
-        if llm_engine is not None
-        else MolinkEngine.from_engine_args(
+
+    is_worker = bool(getattr(args, "molink_initial_peer", None))
+
+    if llm_engine is not None:
+        engine = llm_engine
+    elif is_worker:
+        from molinkv1.engine.worker_node import MolinkWorkerNode
+        vllm_config = engine_args.create_engine_config(UsageContext.API_SERVER)
+        # Attach molink_config to vllm_config so the worker node can read it.
+        molink_config = MolinkConfig(
+            enabled=True,
+            initial_peer=engine_args.molink_initial_peer,
+            grpc_port=engine_args.molink_grpc_port,
+            start_layer=engine_args.molink_start_layer,
+            end_layer=engine_args.molink_end_layer,
+        )
+        from molinkv1.config import VllmConfig1
+        vllm_config.__class__ = VllmConfig1
+        vllm_config._update_attr(molink_config)
+        engine = MolinkWorkerNode(vllm_config)
+    else:
+        engine = MolinkEngine.from_engine_args(
             engine_args, usage_context=UsageContext.API_SERVER
         )
-    )
+
     app.state.engine_client = engine
     return app
 
