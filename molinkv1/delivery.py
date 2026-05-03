@@ -7,12 +7,12 @@ computation with communication.
 """
 
 import asyncio
-import io
 import multiprocessing as mp
 import struct
 import time
 import traceback
 from typing import Any, Dict, Optional
+
 import grpc.aio as aio
 import numpy as np
 import torch
@@ -33,22 +33,11 @@ class TensorDeliveryProcess(mp.Process):
     """
 
     def __init__(self, max_message_size_mb: int = 200):
-        """Initialize the delivery process.
-
-        Args:
-            max_message_size_mb: Maximum gRPC message size in MB.
-        """
         super().__init__(daemon=True, name="MolinkTensorDelivery")
 
         self.max_message_size_mb = max_message_size_mb
-
-        # Queue for pending deliveries
         self.delivery_queue: mp.Queue = mp.Queue(maxsize=100)
-
-        # Queue for metrics output (read by parent process)
         self.metrics_queue: mp.Queue = mp.Queue(maxsize=1000)
-
-        # Shutdown event
         self._shutdown = mp.Event()
 
     def run(self):
@@ -56,7 +45,6 @@ class TensorDeliveryProcess(mp.Process):
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
-        # Cache for gRPC channels and stubs
         channel_cache: Dict[str, aio.Channel] = {}
         stub_cache: Dict[str, molink_pb2_grpc.MolinkServiceStub] = {}
 
@@ -76,17 +64,14 @@ class TensorDeliveryProcess(mp.Process):
             virtual_engine: int,
             next_server: str,
         ):
-            """Deliver intermediate tensors to the next pipeline stage."""
             try:
-                # Serialize tensors using raw bytes (no pickle overhead)
                 grpc_tensors = molink_pb2.IntermediateTensors()
                 total_bytes = 0
                 t_ser_start = time.perf_counter()
                 for key, tensor in intermediate_tensors_cpu.items():
                     tensor = tensor.detach().cpu()
-                    # Store shape and torch dtype string
                     shape = tensor.shape
-                    torch_dtype = str(tensor.dtype)  # e.g. "torch.bfloat16"
+                    torch_dtype = str(tensor.dtype)
                     if tensor.dtype == torch.bfloat16:
                         t_bf = tensor.contiguous()
                         if t_bf.dim() == 0:
@@ -95,8 +80,6 @@ class TensorDeliveryProcess(mp.Process):
                             raw = t_bf.view(dtype=torch.uint8).numpy().tobytes()
                     else:
                         raw = tensor.numpy().tobytes()
-                    elem_size = tensor.element_size()
-                    # Header: [ndim(4B)][shape(ndim*8B)][dtype_len(4B)][dtype_str][raw_data]
                     header = struct.pack("<I", len(shape))
                     for dim in shape:
                         header += struct.pack("<Q", dim)
@@ -143,14 +126,11 @@ class TensorDeliveryProcess(mp.Process):
         async def deliver_sampler_output(
             output_bytes: bytes, virtual_engine: int, head_server: str
         ):
-            """Deliver sampler output to the head node."""
             try:
                 sampler_bytes = len(output_bytes)
-
                 request = molink_pb2.SamplerOutput(
                     output_data=output_bytes, virtual_engine=virtual_engine
                 )
-
                 stub = get_stub(head_server)
                 t_grpc_start = time.perf_counter()
                 response = await stub.PushSamplerOutput(request)
@@ -172,10 +152,8 @@ class TensorDeliveryProcess(mp.Process):
                 traceback.print_exc()
 
         async def consumer_loop():
-            """Consumer loop for processing delivery requests."""
             while not self._shutdown.is_set():
                 try:
-                    # Non-blocking get with timeout
                     item = await loop.run_in_executor(
                         None, lambda: self.delivery_queue.get(timeout=0.1)
                     )
@@ -212,7 +190,6 @@ class TensorDeliveryProcess(mp.Process):
 
         async def main():
             await consumer_loop()
-            # Cleanup channels
             for channel in channel_cache.values():
                 await channel.close()
 
@@ -224,35 +201,23 @@ class TensorDeliveryProcess(mp.Process):
             loop.close()
 
     def stop(self):
-        """Stop the delivery process."""
         self._shutdown.set()
 
 
 class TensorDeliveryManager:
-    """Manager for async tensor delivery.
-
-    This class provides a high-level interface for delivering tensors
-    and outputs to other nodes in the pipeline.
-    """
+    """Manager for async tensor delivery via a separate process."""
 
     def __init__(self, max_message_size_mb: int = 200):
-        """Initialize the delivery manager.
-
-        Args:
-            max_message_size_mb: Maximum gRPC message size in MB.
-        """
         self.max_message_size_mb = max_message_size_mb
         self._process: Optional[TensorDeliveryProcess] = None
 
     def start(self):
-        """Start the delivery process."""
         if self._process is None or not self._process.is_alive():
             self._process = TensorDeliveryProcess(self.max_message_size_mb)
             self._process.start()
             logger.info("Tensor delivery process started")
 
     def stop(self):
-        """Stop the delivery process."""
         if self._process is not None:
             self._process.stop()
             self._process.join(timeout=5)
@@ -269,34 +234,10 @@ class TensorDeliveryManager:
         virtual_engine: int,
         next_server: str,
     ):
-        """Deliver intermediate tensors to the next pipeline stage.
-
-        This method copies tensors to CPU and queues them for async delivery.
-
-        Args:
-            intermediate_tensors: Dict of tensor name to GPU tensor.
-            scheduler_output_bytes: Serialized scheduler output.
-            grpc_metadata: Pipeline metadata.
-            virtual_engine: The virtual engine ID.
-            next_server: The address of the next server.
-        """
         if self._process is None:
             raise RuntimeError("Delivery process not started")
 
-        # Copy tensors to CPU for serialization in delivery process
-        t_copy_start = time.perf_counter()
         tensors_cpu = {k: v.to("cpu") for k, v in intermediate_tensors.items()}
-        t_copy_end = time.perf_counter()
-        copy_ms = (t_copy_end - t_copy_start) * 1000
-
-        try:
-            self._process.metrics_queue.put_nowait({
-                "type": "gpu_to_cpu",
-                "copy_ms": copy_ms,
-                "timestamp": time.time(),
-            })
-        except Exception:
-            pass
 
         self._process.delivery_queue.put_nowait(
             (
@@ -314,13 +255,6 @@ class TensorDeliveryManager:
     def deliver_to_head(
         self, output_bytes: bytes, virtual_engine: int, head_server: str
     ):
-        """Deliver sampler output to the head node.
-
-        Args:
-            output_bytes: Serialized ModelRunnerOutput.
-            virtual_engine: The virtual engine ID.
-            head_server: The address of the head server.
-        """
         if self._process is None:
             raise RuntimeError("Delivery process not started")
 
@@ -329,7 +263,6 @@ class TensorDeliveryManager:
         )
 
     def collect_metrics(self) -> list[dict]:
-        """Drain and return all accumulated metrics from the delivery process."""
         if self._process is None:
             return []
         results = []
