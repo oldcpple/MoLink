@@ -280,6 +280,9 @@ class MolinkService(molink_pb2_grpc.MolinkServiceServicer):
             t_compute_end = time.perf_counter()
             compute_ms = (t_compute_end - t_compute_start) * 1000
 
+            # result is (output_bytes, virtual_engine) if last stage, else (None, virtual_engine)
+            output_bytes, ve = result if isinstance(result, tuple) else (None, virtual_engine)
+
             self._record_metric({
                 "type": "worker_step",
                 "deserialize_ms": deserialize_ms,
@@ -287,7 +290,11 @@ class MolinkService(molink_pb2_grpc.MolinkServiceServicer):
                 "timestamp": time.time(),
             })
 
-            return molink_pb2.GrpcResponseData(res=1)
+            return molink_pb2.GrpcResponseData(
+                res=1,
+                output_data=output_bytes or b'',
+                virtual_engine=ve,
+            )
 
         except Exception as e:
             logger.error(f"[MoLink][WORKER] Error in ExecuteWorkerStep: {e}")

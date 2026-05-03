@@ -10,7 +10,7 @@ from vllm.distributed.parallel_state import get_pp_group, get_tp_group
 from vllm.logger import init_logger
 from vllm.sequence import IntermediateTensors
 from vllm.v1.outputs import ModelRunnerOutput, AsyncModelRunnerOutput
-from vllm.v1.worker.gpu_worker import Worker
+from vllm.v1.worker.gpu_worker import AsyncIntermediateTensors, Worker
 
 logger = init_logger(__name__)
 
@@ -42,6 +42,13 @@ class MolinkWorker(Worker):
         self._molink_intermediate_tensors = intermediate_tensors
 
     def _molink_get_intermediate_tensors(self) -> Optional[IntermediateTensors]:
+        """Return stored intermediate tensors (kept on current device)."""
+        tensors = self._molink_intermediate_tensors
+        self._molink_intermediate_tensors = None
+        return tensors
+
+    def _molink_get_intermediate_tensors_cpu(self) -> Optional[IntermediateTensors]:
+        """Return stored intermediate tensors moved to CPU (for gRPC transfer)."""
         tensors = self._molink_intermediate_tensors
         self._molink_intermediate_tensors = None
         if tensors is not None:
@@ -94,10 +101,16 @@ class MolinkWorker(Worker):
                         "[MoLink][Worker] No intermediate tensors found in local storage!"
                     )
             else:
-                intermediate_tensors = IntermediateTensors(
-                    get_pp_group().recv_tensor_dict(
+                tensor_dict, comm_handles, comm_postprocess = (
+                    get_pp_group().irecv_tensor_dict(
                         all_gather_group=get_tp_group(),
                     )
+                )
+                assert tensor_dict is not None
+                intermediate_tensors = AsyncIntermediateTensors(
+                    tensor_dict,
+                    comm_handles=comm_handles,
+                    comm_postprocess=comm_postprocess,
                 )
 
         with self.annotate_profile(scheduler_output):
@@ -118,6 +131,7 @@ class MolinkWorker(Worker):
             self._pp_send_work = get_pp_group().isend_tensor_dict(
                 output.tensors,
                 all_gather_group=get_tp_group(),
+                all_gather_tensors={},
             )
             return None
 
