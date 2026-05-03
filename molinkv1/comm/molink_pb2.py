@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0cmolink.proto\x12\x06molink\"/\n\x0bTensorEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\x13\n\x0btensor_data\x18\x02 \x01(\x0c\";\n\x13IntermediateTensors\x12$\n\x07tensors\x18\x01 \x03(\x0b\x32\x13.molink.TensorEntry\"\x95\x01\n\x0fGrpcRequestData\x12\x18\n\x10scheduler_output\x18\x01 \x01(\x0c\x12\x39\n\x14intermediate_tensors\x18\x02 \x01(\x0b\x32\x1b.molink.IntermediateTensors\x12\x15\n\rgrpc_metadata\x18\x03 \x01(\x0c\x12\x16\n\x0evirtual_engine\x18\x04 \x01(\x05\"6\n\x10GrpcResponseData\x12\x0b\n\x03res\x18\x01 \x01(\x05\x12\x15\n\rerror_message\x18\x02 \x01(\t\"F\n\x12GrpcTriggerRequest\x12\x16\n\x0evirtual_engine\x18\x01 \x01(\x05\x12\x18\n\x10scheduler_output\x18\x02 \x01(\x0c\"<\n\rSamplerOutput\x12\x13\n\x0boutput_data\x18\x01 \x01(\x0c\x12\x16\n\x0evirtual_engine\x18\x02 \x01(\x05\"`\n\x08NodeInfo\x12\n\n\x02ip\x18\x01 \x01(\t\x12\x13\n\x0bstart_layer\x18\x02 \x01(\x05\x12\x11\n\tend_layer\x18\x03 \x01(\x05\x12\x0f\n\x07pp_rank\x18\x04 \x01(\x05\x12\x0f\n\x07tp_size\x18\x05 \x01(\x05\"I\n\x10PipelineTopology\x12\x1f\n\x05nodes\x18\x01 \x03(\x0b\x32\x10.molink.NodeInfo\x12\x14\n\x0ctotal_layers\x18\x02 \x01(\x05\"\x14\n\x12HealthCheckRequest\"6\n\x13HealthCheckResponse\x12\x0f\n\x07healthy\x18\x01 \x01(\x08\x12\x0e\n\x06status\x18\x02 \x01(\t\"\\\n\x11KVCacheConfigData\x12\x16\n\x0enum_gpu_blocks\x18\x01 \x01(\x05\x12\x16\n\x0enum_cpu_blocks\x18\x02 \x01(\x05\x12\x17\n\x0fkv_cache_config\x18\x03 \x01(\x0c\"H\n\x0fModelConfigData\x12\x13\n\x0bvllm_config\x18\x01 \x01(\x0c\x12\x0f\n\x07pp_rank\x18\x02 \x01(\x05\x12\x0f\n\x07pp_size\x18\x03 \x01(\x05\x32\x89\x05\n\rMolinkService\x12:\n\x0cJoinPipeline\x12\x10.molink.NodeInfo\x1a\x18.molink.GrpcResponseData\x12\x43\n\x0bGetTopology\x12\x1a.molink.HealthCheckRequest\x1a\x18.molink.PipelineTopology\x12L\n\x17PushIntermediateTensors\x12\x17.molink.GrpcRequestData\x1a\x18.molink.GrpcResponseData\x12\x44\n\x11PushSamplerOutput\x12\x15.molink.SamplerOutput\x1a\x18.molink.GrpcResponseData\x12I\n\x11\x45xecuteWorkerStep\x12\x1a.molink.GrpcTriggerRequest\x1a\x18.molink.GrpcResponseData\x12H\n\x11SyncKVCacheConfig\x12\x19.molink.KVCacheConfigData\x1a\x18.molink.GrpcResponseData\x12\x44\n\x0fInitializeModel\x12\x17.molink.ModelConfigData\x1a\x18.molink.GrpcResponseData\x12\x46\n\x0bHealthCheck\x12\x1a.molink.HealthCheckRequest\x1a\x1b.molink.HealthCheckResponse\x12@\n\x08Shutdown\x12\x1a.molink.HealthCheckRequest\x1a\x18.molink.GrpcResponseDatab\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0cmolink.proto\x12\x06molink\"/\n\x0bTensorEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\x13\n\x0btensor_data\x18\x02 \x01(\x0c\";\n\x13IntermediateTensors\x12$\n\x07tensors\x18\x01 \x03(\x0b\x32\x13.molink.TensorEntry\"\x95\x01\n\x0fGrpcRequestData\x12\x18\n\x10scheduler_output\x18\x01 \x01(\x0c\x12\x39\n\x14intermediate_tensors\x18\x02 \x01(\x0b\x32\x1b.molink.IntermediateTensors\x12\x15\n\rgrpc_metadata\x18\x03 \x01(\x0c\x12\x16\n\x0evirtual_engine\x18\x04 \x01(\x05\"c\n\x10GrpcResponseData\x12\x0b\n\x03res\x18\x01 \x01(\x05\x12\x15\n\rerror_message\x18\x02 \x01(\t\x12\x13\n\x0boutput_data\x18\x03 \x01(\x0c\x12\x16\n\x0evirtual_engine\x18\x04 \x01(\x05\"F\n\x12GrpcTriggerRequest\x12\x16\n\x0evirtual_engine\x18\x01 \x01(\x05\x12\x18\n\x10scheduler_output\x18\x02 \x01(\x0c\"<\n\rSamplerOutput\x12\x13\n\x0boutput_data\x18\x01 \x01(\x0c\x12\x16\n\x0evirtual_engine\x18\x02 \x01(\x05\"`\n\x08NodeInfo\x12\n\n\x02ip\x18\x01 \x01(\t\x12\x13\n\x0bstart_layer\x18\x02 \x01(\x05\x12\x11\n\tend_layer\x18\x03 \x01(\x05\x12\x0f\n\x07pp_rank\x18\x04 \x01(\x05\x12\x0f\n\x07tp_size\x18\x05 \x01(\x05\"I\n\x10PipelineTopology\x12\x1f\n\x05nodes\x18\x01 \x03(\x0b\x32\x10.molink.NodeInfo\x12\x14\n\x0ctotal_layers\x18\x02 \x01(\x05\"\x14\n\x12HealthCheckRequest\"6\n\x13HealthCheckResponse\x12\x0f\n\x07healthy\x18\x01 \x01(\x08\x12\x0e\n\x06status\x18\x02 \x01(\t\"\\\n\x11KVCacheConfigData\x12\x16\n\x0enum_gpu_blocks\x18\x01 \x01(\x05\x12\x16\n\x0enum_cpu_blocks\x18\x02 \x01(\x05\x12\x17\n\x0fkv_cache_config\x18\x03 \x01(\x0c\"H\n\x0fModelConfigData\x12\x13\n\x0bvllm_config\x18\x01 \x01(\x0c\x12\x0f\n\x07pp_rank\x18\x02 \x01(\x05\x12\x0f\n\x07pp_size\x18\x03 \x01(\x05\x32\x89\x05\n\rMolinkService\x12:\n\x0cJoinPipeline\x12\x10.molink.NodeInfo\x1a\x18.molink.GrpcResponseData\x12\x43\n\x0bGetTopology\x12\x1a.molink.HealthCheckRequest\x1a\x18.molink.PipelineTopology\x12L\n\x17PushIntermediateTensors\x12\x17.molink.GrpcRequestData\x1a\x18.molink.GrpcResponseData\x12\x44\n\x11PushSamplerOutput\x12\x15.molink.SamplerOutput\x1a\x18.molink.GrpcResponseData\x12I\n\x11\x45xecuteWorkerStep\x12\x1a.molink.GrpcTriggerRequest\x1a\x18.molink.GrpcResponseData\x12H\n\x11SyncKVCacheConfig\x12\x19.molink.KVCacheConfigData\x1a\x18.molink.GrpcResponseData\x12\x44\n\x0fInitializeModel\x12\x17.molink.ModelConfigData\x1a\x18.molink.GrpcResponseData\x12\x46\n\x0bHealthCheck\x12\x1a.molink.HealthCheckRequest\x1a\x1b.molink.HealthCheckResponse\x12@\n\x08Shutdown\x12\x1a.molink.HealthCheckRequest\x1a\x18.molink.GrpcResponseDatab\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -38,23 +38,23 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_GRPCREQUESTDATA']._serialized_start=135
   _globals['_GRPCREQUESTDATA']._serialized_end=284
   _globals['_GRPCRESPONSEDATA']._serialized_start=286
-  _globals['_GRPCRESPONSEDATA']._serialized_end=340
-  _globals['_GRPCTRIGGERREQUEST']._serialized_start=342
-  _globals['_GRPCTRIGGERREQUEST']._serialized_end=412
-  _globals['_SAMPLEROUTPUT']._serialized_start=414
-  _globals['_SAMPLEROUTPUT']._serialized_end=474
-  _globals['_NODEINFO']._serialized_start=476
-  _globals['_NODEINFO']._serialized_end=572
-  _globals['_PIPELINETOPOLOGY']._serialized_start=574
-  _globals['_PIPELINETOPOLOGY']._serialized_end=647
-  _globals['_HEALTHCHECKREQUEST']._serialized_start=649
-  _globals['_HEALTHCHECKREQUEST']._serialized_end=669
-  _globals['_HEALTHCHECKRESPONSE']._serialized_start=671
-  _globals['_HEALTHCHECKRESPONSE']._serialized_end=725
-  _globals['_KVCACHECONFIGDATA']._serialized_start=727
-  _globals['_KVCACHECONFIGDATA']._serialized_end=819
-  _globals['_MODELCONFIGDATA']._serialized_start=821
-  _globals['_MODELCONFIGDATA']._serialized_end=893
-  _globals['_MOLINKSERVICE']._serialized_start=896
-  _globals['_MOLINKSERVICE']._serialized_end=1545
+  _globals['_GRPCRESPONSEDATA']._serialized_end=385
+  _globals['_GRPCTRIGGERREQUEST']._serialized_start=387
+  _globals['_GRPCTRIGGERREQUEST']._serialized_end=457
+  _globals['_SAMPLEROUTPUT']._serialized_start=459
+  _globals['_SAMPLEROUTPUT']._serialized_end=519
+  _globals['_NODEINFO']._serialized_start=521
+  _globals['_NODEINFO']._serialized_end=617
+  _globals['_PIPELINETOPOLOGY']._serialized_start=619
+  _globals['_PIPELINETOPOLOGY']._serialized_end=692
+  _globals['_HEALTHCHECKREQUEST']._serialized_start=694
+  _globals['_HEALTHCHECKREQUEST']._serialized_end=714
+  _globals['_HEALTHCHECKRESPONSE']._serialized_start=716
+  _globals['_HEALTHCHECKRESPONSE']._serialized_end=770
+  _globals['_KVCACHECONFIGDATA']._serialized_start=772
+  _globals['_KVCACHECONFIGDATA']._serialized_end=864
+  _globals['_MODELCONFIGDATA']._serialized_start=866
+  _globals['_MODELCONFIGDATA']._serialized_end=938
+  _globals['_MOLINKSERVICE']._serialized_start=941
+  _globals['_MOLINKSERVICE']._serialized_end=1590
 # @@protoc_insertion_point(module_scope)
