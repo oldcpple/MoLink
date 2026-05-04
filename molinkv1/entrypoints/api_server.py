@@ -197,6 +197,12 @@ async def init_app(
         from molinkv1.config import VllmConfig1
         vllm_config.__class__ = VllmConfig1
         vllm_config._update_attr(molink_config)
+
+        # MoLink cross-node PP does not support async scheduling.
+        # Async scheduling stores sampled tokens on GPU and communicates
+        # them via NCCL PP broadcast, which doesn't work with gRPC.
+        vllm_config.scheduler_config.async_scheduling = False
+
         engine = MolinkWorkerNode(vllm_config)
     else:
         engine = MolinkEngine.from_engine_args(

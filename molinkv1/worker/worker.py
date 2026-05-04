@@ -93,14 +93,6 @@ class MolinkWorker(Worker):
             and self.vllm_config.molink_config.enabled
         )
 
-        import sys
-        pp_group = get_pp_group()
-        n_tokens = scheduler_output.total_num_scheduled_tokens
-        print(f"[MOLINK-DEBUG][WORKER-EXEC] is_molink={is_molink}, forward_pass={forward_pass}, "
-              f"is_first_rank={pp_group.is_first_rank}, is_last_rank={pp_group.is_last_rank}, "
-              f"num_scheduled_tokens={n_tokens}",
-              file=sys.stderr, flush=True)
-
         if forward_pass and not get_pp_group().is_first_rank:
             if is_molink:
                 intermediate_tensors = self._molink_get_intermediate_tensors()
@@ -108,12 +100,6 @@ class MolinkWorker(Worker):
                     logger.warning(
                         "[MoLink][Worker] No intermediate tensors found in local storage!"
                     )
-                else:
-                    for key, tensor in intermediate_tensors.tensors.items():
-                        t = tensor.cpu() if tensor.is_cuda else tensor
-                        print(f"[MOLINK-DEBUG][WORKER-EXEC] Input tensor '{key}': shape={tensor.shape}, "
-                              f"dtype={tensor.dtype}, first5={t.flatten()[:5].tolist()}",
-                              file=sys.stderr, flush=True)
             else:
                 tensor_dict, comm_handles, comm_postprocess = (
                     get_pp_group().irecv_tensor_dict(
@@ -131,12 +117,6 @@ class MolinkWorker(Worker):
             output = self.model_runner.execute_model(
                 scheduler_output, intermediate_tensors
             )
-            print(f"[MOLINK-DEBUG][WORKER-EXEC] model_runner returned: type={type(output).__name__}",
-                  file=sys.stderr, flush=True)
-            if isinstance(output, IntermediateTensors):
-                for key, tensor in output.tensors.items():
-                    print(f"[MOLINK-DEBUG][WORKER-EXEC] Output tensor '{key}': shape={tensor.shape}",
-                          file=sys.stderr, flush=True)
             if isinstance(output, (ModelRunnerOutput, AsyncModelRunnerOutput, NoneType)):
                 return output
 

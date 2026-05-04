@@ -171,13 +171,6 @@ class WorkerNodeService(molink_pb2_grpc.MolinkServiceServicer):
             None, _deserialize_tensors, intermediate_tensors_bytes
         )
 
-        # DEBUG: log received tensors
-        import sys
-        for key, tensor in intermediate_tensors.tensors.items():
-            print(f"[MOLINK-DEBUG][WORKER] Received tensor '{key}': shape={tensor.shape}, dtype={tensor.dtype}, "
-                  f"device={tensor.device}, first5={tensor.flatten()[:5].tolist()}",
-                  file=sys.stderr, flush=True)
-
         scheduler_output = cloudpickle.loads(scheduler_output_bytes)
 
         # Serialize pipeline-step execution to prevent concurrent access
@@ -235,71 +228,16 @@ class WorkerNodeService(molink_pb2_grpc.MolinkServiceServicer):
             None, self.worker.execute_model, scheduler_output
         )
 
-        import sys
-        print(f"[MOLINK-DEBUG][WORKER] execute_model returned: type={type(output).__name__}",
-              file=sys.stderr, flush=True)
-
-        # DEBUG: check logits BEFORE sample_tokens clears them
-        if output is None:
-            try:
-                mr = self.worker.model_runner
-                state = getattr(mr, 'execute_model_state', None)
-                if state is not None:
-                    logits = state[1]  # logits at index 1 in the tuple
-                    if logits is not None:
-                        probs = torch.softmax(logits.float(), dim=-1)
-                        top5_vals, top5_ids = torch.topk(probs[0], 5)
-                        print(f"[MOLINK-DEBUG][WORKER-LOGITS] shape={logits.shape}, "
-                              f"top5_ids={top5_ids.tolist()}, top5_probs={top5_vals.tolist()}",
-                              file=sys.stderr, flush=True)
-                    else:
-                        print(f"[MOLINK-DEBUG][WORKER-LOGITS] logits is None",
-                              file=sys.stderr, flush=True)
-                else:
-                    print(f"[MOLINK-DEBUG][WORKER-LOGITS] execute_model_state is None",
-                          file=sys.stderr, flush=True)
-            except Exception as e:
-                import traceback as _tb
-                print(f"[MOLINK-DEBUG][WORKER-LOGITS] Error: {e}\n{_tb.format_exc()}",
-                      file=sys.stderr, flush=True)
-
         # If output is None (last PP stage stores state), call sample_tokens.
         if output is None:
             output = await loop.run_in_executor(
                 None, self.worker.sample_tokens, None
             )
-            print(f"[MOLINK-DEBUG][WORKER] sample_tokens returned: type={type(output).__name__}",
-                  file=sys.stderr, flush=True)
 
         # Resolve async output (contains unpicklable torch.Event/Stream).
         from vllm.v1.outputs import AsyncModelRunnerOutput
         if isinstance(output, AsyncModelRunnerOutput):
             output = await loop.run_in_executor(None, output.get_output)
-            print(f"[MOLINK-DEBUG][WORKER] Resolved AsyncModelRunnerOutput: type={type(output).__name__}",
-                  file=sys.stderr, flush=True)
-
-        # DEBUG: log output details
-        if hasattr(output, 'sampled_token_ids'):
-            print(f"[MOLINK-DEBUG][WORKER] sampled_token_ids={output.sampled_token_ids}",
-                  file=sys.stderr, flush=True)
-        if hasattr(output, 'req_ids'):
-            print(f"[MOLINK-DEBUG][WORKER] req_ids={output.req_ids}",
-                  file=sys.stderr, flush=True)
-
-        # DEBUG: check logits from model runner
-        try:
-            state = self.worker.model_runner.execute_model_state
-            if state is not None:
-                logits = state[1]  # logits is at index 1
-                if logits is not None:
-                    probs = torch.softmax(logits.float(), dim=-1)
-                    top5_vals, top5_ids = torch.topk(probs[0], 5)
-                    print(f"[MOLINK-DEBUG][WORKER] Logits shape={logits.shape}, "
-                          f"top5_ids={top5_ids.tolist()}, top5_probs={top5_vals.tolist()}",
-                          file=sys.stderr, flush=True)
-        except Exception as e:
-            print(f"[MOLINK-DEBUG][WORKER] Failed to check logits: {e}",
-                  file=sys.stderr, flush=True)
 
         return output
 
@@ -372,61 +310,6 @@ class MolinkWorkerNode:
         with set_current_vllm_config(vllm_config):
             self.worker.init_device()
             self.worker.load_model()
-
-        # DEBUG: Check which layers the model has
-        import sys
-        mr = self.worker.model_runner
-        model = mr.model
-
-        # Check PP config from model
-        pp_size = vllm_config.parallel_config.pipeline_parallel_size
-        print(f"[MOLINK-DEBUG][WORKER-MODEL] pp_size={pp_size}",
-              file=sys.stderr, flush=True)
-
-        # Check the actual model layer range
-        inner_model = getattr(model, 'model', model)
-        if hasattr(inner_model, 'layers'):
-            num_layers = len(inner_model.layers)
-            # Check if model has start_layer/end_layer stored
-            start = getattr(inner_model, 'start_layer', 'N/A')
-            end = getattr(inner_model, 'end_layer', 'N/A')
-            pp_start = getattr(inner_model, 'pp_start_layer', 'N/A')
-            pp_end = getattr(inner_model, 'pp_end_layer', 'N/A')
-            print(f"[MOLINK-DEBUG][WORKER-MODEL] num_layers={num_layers}, "
-                  f"start_layer={start}, end_layer={end}, "
-                  f"pp_start_layer={pp_start}, pp_end_layer={pp_end}",
-                  file=sys.stderr, flush=True)
-            # Check first and last layer weight norm
-            first_layer = inner_model.layers[0]
-            last_layer = inner_model.layers[-1]
-            for name, param in list(first_layer.named_parameters())[:1]:
-                print(f"[MOLINK-DEBUG][WORKER-MODEL] Layer 0 '{name}': norm={param.data.norm().item():.4f}, "
-                      f"is_meta={param.is_meta}",
-                      file=sys.stderr, flush=True)
-            for name, param in list(last_layer.named_parameters())[:1]:
-                print(f"[MOLINK-DEBUG][WORKER-MODEL] Layer {num_layers-1} '{name}': norm={param.data.norm().item():.4f}, "
-                      f"is_meta={param.is_meta}",
-                      file=sys.stderr, flush=True)
-            # Check layers 19 and 20
-            if num_layers > 20:
-                layer19 = inner_model.layers[19]
-                layer20 = inner_model.layers[20]
-                for name, param in list(layer19.named_parameters())[:1]:
-                    print(f"[MOLINK-DEBUG][WORKER-MODEL] Layer 19 '{name}': norm={param.data.norm().item():.4f}, "
-                          f"is_meta={param.is_meta}",
-                          file=sys.stderr, flush=True)
-                for name, param in list(layer20.named_parameters())[:1]:
-                    print(f"[MOLINK-DEBUG][WORKER-MODEL] Layer 20 '{name}': norm={param.data.norm().item():.4f}, "
-                          f"is_meta={param.is_meta}",
-                          file=sys.stderr, flush=True)
-
-        # Also check pp_indices
-        from molinkv1.parallel_state import get_molink_pp_indices, is_molink_enabled
-        from vllm.distributed.utils import get_pp_indices
-        print(f"[MOLINK-DEBUG][WORKER-MODEL] is_molink_enabled={is_molink_enabled()}, "
-              f"get_molink_pp_indices(40,0,1)={get_molink_pp_indices(40,0,1)}, "
-              f"get_pp_indices(40,0,1)={get_pp_indices(40,0,1)}",
-              file=sys.stderr, flush=True)
 
         # ---- Start gRPC server first so we can receive head's num_gpu_blocks ----
         self.ip = extract_ip()
