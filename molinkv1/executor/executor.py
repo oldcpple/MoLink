@@ -149,6 +149,7 @@ class MolinkExecutor(MultiprocExecutor):
 
         self.grpc_address = f"{self.ip}:{self.grpc_port}"
         logger.info(f"MoLink gRPC server starting at {self.grpc_address}")
+        import sys; print(f"[MOLINK-DEBUG] Head gRPC address: {self.grpc_address}, requested port: {config.grpc_port}, actual port: {self.grpc_port}", file=sys.stderr, flush=True)
         logger.info(
             "DISTRIBUTED SERVICE INFO: If this is the first node of the swarm, "
             f"you can copy the GRPC INFO ({self.grpc_address}) as the initial peer of following nodes"
@@ -270,6 +271,12 @@ class MolinkExecutor(MultiprocExecutor):
         tensors_cpu = {k: v.to("cpu") for k, v in tensors.items()}
         grpc_tensors = _serialize_tensors(tensors_cpu)
 
+        # DEBUG: log tensor info being sent
+        for key, tensor in tensors_cpu.items():
+            import sys
+            print(f"[MOLINK-DEBUG][HEAD] Sending tensor '{key}': shape={tensor.shape}, dtype={tensor.dtype}, "
+                  f"first5={tensor.flatten()[:5].tolist()}", file=sys.stderr, flush=True)
+
         request = molink_pb2.GrpcRequestData(
             scheduler_output=scheduler_output_bytes,
             intermediate_tensors=grpc_tensors,
@@ -345,6 +352,18 @@ class MolinkExecutor(MultiprocExecutor):
                 results[0] if isinstance(results, list) else results
             )
 
+            # DEBUG: log intermediate tensors
+            import sys
+            if intermediate_tensors is not None:
+                for key, tensor in intermediate_tensors.tensors.items():
+                    t = tensor.to("cpu") if tensor.is_cuda else tensor
+                    print(f"[MOLINK-DEBUG][HEAD] Intermediate tensor '{key}': shape={tensor.shape}, "
+                          f"dtype={tensor.dtype}, device={tensor.device}, first5={t.flatten()[:5].tolist()}",
+                          file=sys.stderr, flush=True)
+            else:
+                print(f"[MOLINK-DEBUG][HEAD] intermediate_tensors is None!",
+                      file=sys.stderr, flush=True)
+
             if intermediate_tensors is None:
                 logger.error(
                     "[MoLink][PIPELINE] intermediate_tensors is None - "
@@ -361,6 +380,7 @@ class MolinkExecutor(MultiprocExecutor):
             # 2. Get pipeline metadata
             grpc_metadata = self.molink_service.topology.get_metadata()
             server_list = grpc_metadata.get("server_list", [])
+            import sys; print(f"[MOLINK-DEBUG] topology node_pool: {self.molink_service.topology.node_pool}, node_info_dict: {self.molink_service.topology.node_info_dict}, server_list: {server_list}", file=sys.stderr, flush=True)
             virtual_engine = getattr(scheduler_output, "virtual_engine", 0)
 
             if len(server_list) < 2:
@@ -398,6 +418,11 @@ class MolinkExecutor(MultiprocExecutor):
             ].get()
 
             result = cloudpickle.loads(output_bytes)
+            import sys
+            print(f"[MOLINK-DEBUG][HEAD] Received result: type={type(result).__name__}, "
+                  f"req_ids={getattr(result, 'req_ids', 'N/A')}, "
+                  f"sampled_token_ids={getattr(result, 'sampled_token_ids', 'N/A')}",
+                  file=sys.stderr, flush=True)
             logger.info(
                 f"[MoLink][PIPELINE] Got result: type={type(result).__name__}, "
                 f"req_ids={getattr(result, 'req_ids', 'N/A')}"
