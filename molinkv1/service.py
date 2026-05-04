@@ -92,6 +92,9 @@ class MolinkService(molink_pb2_grpc.MolinkServiceServicer):
     ) -> molink_pb2.GrpcResponseData:
         """Handle a new node joining the pipeline.
 
+        Sends the head node's num_gpu_blocks in the response so the worker
+        node can synchronise its KV cache size with the scheduler.
+
         Args:
             request: NodeInfo containing the joining node's information.
             context: gRPC context.
@@ -110,7 +113,18 @@ class MolinkService(molink_pb2_grpc.MolinkServiceServicer):
                 f"Node {node_ip} joined pipeline " f"(layers {start_layer}-{end_layer})"
             )
 
-            return molink_pb2.GrpcResponseData(res=1)
+            # Send head node's num_gpu_blocks so the worker can cap its own.
+            import struct as _struct
+            head_num_blocks = getattr(
+                self.executor.vllm_config.cache_config, "num_gpu_blocks", 0
+            )
+            if head_num_blocks is None:
+                head_num_blocks = 0
+
+            return molink_pb2.GrpcResponseData(
+                res=1,
+                output_data=_struct.pack("<Q", head_num_blocks),
+            )
 
         except Exception as e:
             logger.error(f"Error in JoinPipeline: {e}")

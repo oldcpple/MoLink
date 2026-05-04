@@ -90,7 +90,7 @@ def _deserialize_tensors(tensor_bytes: Dict[str, bytes]) -> IntermediateTensors:
             for d in shape:
                 n_elements *= d
             tensor = (
-                torch.frombuffer(raw, dtype=torch.uint8)
+                torch.frombuffer(bytearray(raw), dtype=torch.uint8)
                 .reshape(n_elements, 2)
                 .view(torch.bfloat16)
                 .reshape(tuple(shape))
@@ -134,6 +134,9 @@ class WorkerNodeService(molink_pb2_grpc.MolinkServiceServicer):
         self._metrics_lock = threading.Lock()
         self._metrics_deque = collections.deque(maxlen=2000)
 
+        # Serialize pipeline-step execution so only one _run_step runs at a time.
+        self._step_lock = asyncio.Lock()
+
     def _get_stub(self, address: str) -> molink_pb2_grpc.MolinkServiceStub:
         if address not in self._stub_cache:
             channel = aio.insecure_channel(address, options=get_grpc_options(self.max_message_size_mb))
@@ -169,8 +172,10 @@ class WorkerNodeService(molink_pb2_grpc.MolinkServiceServicer):
         )
         scheduler_output = cloudpickle.loads(scheduler_output_bytes)
 
-        # Execute the full forward + sample step directly on the local model runner.
-        output = await self._run_step(scheduler_output, intermediate_tensors)
+        # Serialize pipeline-step execution to prevent concurrent access
+        # to the shared model runner state.
+        async with self._step_lock:
+            output = await self._run_step(scheduler_output, intermediate_tensors)
 
         # Route the result.
         server_list = grpc_metadata.get("server_list", [])
@@ -227,6 +232,11 @@ class WorkerNodeService(molink_pb2_grpc.MolinkServiceServicer):
             output = await loop.run_in_executor(
                 None, self.worker.sample_tokens, None
             )
+
+        # Resolve async output (contains unpicklable torch.Event/Stream).
+        from vllm.v1.outputs import AsyncModelRunnerOutput
+        if isinstance(output, AsyncModelRunnerOutput):
+            output = await loop.run_in_executor(None, output.get_output)
 
         return output
 
@@ -294,17 +304,13 @@ class MolinkWorkerNode:
             is_driver_worker=True,
         )
 
-        # Initialize CUDA, distributed, model runner, KV cache, and warm up.
+        # Initialize CUDA and load model.
         from vllm.config import set_current_vllm_config
         with set_current_vllm_config(vllm_config):
             self.worker.init_device()
             self.worker.load_model()
-            self._init_kv_cache()
-            self.worker.compile_or_warm_up_model()
 
-        logger.info("MolinkWorkerNode: model runner ready")
-
-        # ---- Start gRPC server ----
+        # ---- Start gRPC server first so we can receive head's num_gpu_blocks ----
         self.ip = extract_ip()
         self.grpc_port = find_free_port(
             start_port=self.molink_config.grpc_port if self.molink_config.grpc_port > 0 else 50051
@@ -317,14 +323,22 @@ class MolinkWorkerNode:
         )
         future.result(timeout=30)
 
-        # ---- Join pipeline ----
+        # ---- Join pipeline and get head's num_gpu_blocks ----
+        head_num_gpu_blocks = None
         future = asyncio.run_coroutine_threadsafe(
             self._join_pipeline(), self._event_loop
         )
         try:
-            future.result(timeout=30)
+            head_num_gpu_blocks = future.result(timeout=30)
         except Exception as e:
             logger.error(f"Failed to join pipeline: {e}")
+
+        # ---- Initialize KV cache (possibly capped to head's num_gpu_blocks) ----
+        with set_current_vllm_config(vllm_config):
+            self._init_kv_cache(head_num_gpu_blocks=head_num_gpu_blocks)
+            self.worker.compile_or_warm_up_model()
+
+        logger.info("MolinkWorkerNode: model runner ready")
 
         logger.info(
             f"MolinkWorkerNode initialized at {self.grpc_address}, "
@@ -333,8 +347,15 @@ class MolinkWorkerNode:
 
     # -- KV cache -----------------------------------------------------------
 
-    def _init_kv_cache(self):
-        """Profile memory, compute KV cache config, allocate and initialize."""
+    def _init_kv_cache(self, head_num_gpu_blocks: Optional[int] = None):
+        """Profile memory, compute KV cache config, allocate and initialize.
+
+        Args:
+            head_num_gpu_blocks: The head node's num_gpu_blocks.  If provided,
+                the worker caps its own num_gpu_blocks to this value so that
+                the head scheduler never allocates blocks the worker doesn't
+                have.
+        """
         from vllm.v1.core.kv_cache_utils import (
             get_kv_cache_configs,
             generate_scheduler_kv_cache_config,
@@ -353,7 +374,36 @@ class MolinkWorkerNode:
         )
 
         scheduler_kv_cache_config = generate_scheduler_kv_cache_config(kv_cache_configs)
-        self.vllm_config.cache_config.num_gpu_blocks = scheduler_kv_cache_config.num_blocks
+        num_blocks = scheduler_kv_cache_config.num_blocks
+
+        # Cap to the head node's value so the scheduler's block IDs are
+        # valid on this worker.
+        if head_num_gpu_blocks is not None and head_num_gpu_blocks > 0:
+            if num_blocks > head_num_gpu_blocks:
+                logger.info(
+                    f"Worker num_gpu_blocks ({num_blocks}) > head "
+                    f"({head_num_gpu_blocks}). Capping to head's value."
+                )
+                num_blocks = head_num_gpu_blocks
+                self.vllm_config.cache_config.num_gpu_blocks = num_blocks
+                # Regenerate config with capped blocks.
+                self.vllm_config.cache_config.num_gpu_blocks_override = num_blocks
+                kv_cache_configs = get_kv_cache_configs(
+                    self.vllm_config, [kv_cache_specs], [available_memory]
+                )
+                scheduler_kv_cache_config = generate_scheduler_kv_cache_config(
+                    kv_cache_configs
+                )
+                num_blocks = scheduler_kv_cache_config.num_blocks
+            else:
+                logger.info(
+                    f"Worker num_gpu_blocks ({num_blocks}) <= head "
+                    f"({head_num_gpu_blocks}). No capping needed."
+                )
+                self.vllm_config.cache_config.num_gpu_blocks = num_blocks
+        else:
+            self.vllm_config.cache_config.num_gpu_blocks = num_blocks
+
         kv_cache_groups = scheduler_kv_cache_config.kv_cache_groups
         if kv_cache_groups:
             self.vllm_config.cache_config.block_size = min(
@@ -363,7 +413,7 @@ class MolinkWorkerNode:
         self.worker.initialize_from_config(kv_cache_configs[0])
 
         logger.info(
-            f"KV cache initialized: num_gpu_blocks={scheduler_kv_cache_config.num_blocks}"
+            f"KV cache initialized: num_gpu_blocks={num_blocks}"
         )
 
     # -- Event loop ---------------------------------------------------------
@@ -401,7 +451,8 @@ class MolinkWorkerNode:
         await self.grpc_server.start()
         logger.info(f"Worker gRPC server started on port {self.grpc_port}")
 
-    async def _join_pipeline(self):
+    async def _join_pipeline(self) -> Optional[int]:
+        """Join the pipeline and return the head node's num_gpu_blocks."""
         config = self.molink_config
         channel = None
         try:
@@ -419,6 +470,15 @@ class MolinkWorkerNode:
                 logger.info(f"Successfully joined pipeline at {config.initial_peer}")
             else:
                 logger.error(f"Failed to join pipeline: {response.error_message}")
+
+            # Extract head's num_gpu_blocks from the response.
+            head_num_gpu_blocks = None
+            if response.output_data:
+                import struct as _struct
+                (head_num_gpu_blocks,) = _struct.unpack(
+                    "<Q", response.output_data
+                )
+            return head_num_gpu_blocks
         except Exception as e:
             logger.error(f"Error joining pipeline: {e}")
             traceback.print_exc()
