@@ -1,5 +1,3 @@
-from dataclasses import fields
-
 from vllm.logger import init_logger
 from vllm.usage.usage_lib import UsageContext
 from vllm.v1.engine.async_llm import AsyncLLM
@@ -32,6 +30,11 @@ class MolinkEngine(AsyncLLM):
         )
         config._update_attr(molink_config)
 
+        # MoLink cross-node PP does not support async scheduling.
+        # Async scheduling stores sampled tokens on GPU and communicates
+        # them via NCCL PP broadcast, which doesn't work with gRPC.
+        config.scheduler_config.async_scheduling = False
+
         config.parallel_config.worker_cls = "molinkv1.worker.MolinkWorker"
 
         self._replace_scheduler_config(config)
@@ -41,25 +44,10 @@ class MolinkEngine(AsyncLLM):
         sched = config.scheduler_config
         if isinstance(sched, MolinkSchedulerConfig):
             return
-        try:
-            sched_kwargs = {
-                f.name: getattr(sched, f.name)
-                for f in fields(MolinkSchedulerConfig)
-                if hasattr(sched, f.name)
-            }
-            import sys
-            print(f"[MOLINK-DEBUG] SchedulerConfig before replace: "
-                  f"max_num_batched_tokens={sched.max_num_batched_tokens}, "
-                  f"max_num_scheduled_tokens={sched.max_num_scheduled_tokens}, "
-                  f"enable_chunked_prefill={sched.enable_chunked_prefill}",
-                  file=sys.stderr, flush=True)
-            config.scheduler_config = MolinkSchedulerConfig(**sched_kwargs)
-            print(f"[MOLINK-DEBUG] MolinkSchedulerConfig after replace: "
-                  f"max_num_batched_tokens={config.scheduler_config.max_num_batched_tokens}, "
-                  f"max_num_scheduled_tokens={config.scheduler_config.max_num_scheduled_tokens}",
-                  file=sys.stderr, flush=True)
-        except Exception:
-            sched.__class__ = MolinkSchedulerConfig
+        # Monkey-patch get_scheduler_cls instead of replacing the config object.
+        # Constructing a new MolinkSchedulerConfig fails (Pydantic validation),
+        # and __class__ reassignment can lose computed fields.
+        sched.get_scheduler_cls = MolinkSchedulerConfig.get_scheduler_cls.__get__(sched)
 
     def _patch_engine_core_and_init(self, *args, **kwargs):
         import vllm.v1.engine.core as engine_core_module
