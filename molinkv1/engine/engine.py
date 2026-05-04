@@ -47,7 +47,17 @@ class MolinkEngine(AsyncLLM):
                 for f in fields(MolinkSchedulerConfig)
                 if hasattr(sched, f.name)
             }
+            import sys
+            print(f"[MOLINK-DEBUG] SchedulerConfig before replace: "
+                  f"max_num_batched_tokens={sched.max_num_batched_tokens}, "
+                  f"max_num_scheduled_tokens={sched.max_num_scheduled_tokens}, "
+                  f"enable_chunked_prefill={sched.enable_chunked_prefill}",
+                  file=sys.stderr, flush=True)
             config.scheduler_config = MolinkSchedulerConfig(**sched_kwargs)
+            print(f"[MOLINK-DEBUG] MolinkSchedulerConfig after replace: "
+                  f"max_num_batched_tokens={config.scheduler_config.max_num_batched_tokens}, "
+                  f"max_num_scheduled_tokens={config.scheduler_config.max_num_scheduled_tokens}",
+                  file=sys.stderr, flush=True)
         except Exception:
             sched.__class__ = MolinkSchedulerConfig
 
