@@ -22,6 +22,7 @@ class MolinkConfig:
     end_layer: int = -1
     max_message_size_mb: int = 200
     enable_metrics: bool = False
+    max_concurrent_batches: int = 2
 
     @property
     def enabled(self) -> bool:
