@@ -228,11 +228,17 @@ class WorkerNodeService(molink_pb2_grpc.MolinkServiceServicer):
             None, self.worker.execute_model, scheduler_output
         )
 
-        # If output is None (last PP stage stores state), call sample_tokens.
         if output is None:
-            output = await loop.run_in_executor(
-                None, self.worker.sample_tokens, None
-            )
+            # Non-last PP stages store intermediate tensors internally
+            # instead of returning them. Retrieve them for forwarding.
+            stored = self.worker._molink_get_intermediate_tensors()
+            if stored is not None:
+                output = stored
+            else:
+                # Last PP stage: run sample_tokens to produce final output.
+                output = await loop.run_in_executor(
+                    None, self.worker.sample_tokens, None
+                )
 
         # Resolve async output (contains unpicklable torch.Event/Stream).
         from vllm.v1.outputs import AsyncModelRunnerOutput

@@ -4,6 +4,7 @@ MoLink v1 Automated Test and Performance Benchmarking Script.
 
 """
 
+import argparse
 import asyncio
 import json
 import logging
@@ -82,6 +83,11 @@ class BenchmarkConfig:
     warmup_requests: int = 3
     baseline_iterations: int = 3
     request_timeout: int = REQUEST_TIMEOUT
+    # GPU & pipeline topology
+    head_gpu: int = 0
+    tail_gpu: int = 1
+    split_layer: int = 21
+    total_layers: int = 40
     # Test matrices
     output_token_sizes: list[int] = field(default_factory=lambda: [512, 1024, 2048])
     prompt_sizes_full: list[int] = field(default_factory=lambda: [512, 1024, 2048])
@@ -596,9 +602,11 @@ class ServiceManager:
         self._head_proc: Optional[subprocess.Popen] = None
         self._tail_proc: Optional[subprocess.Popen] = None
         self._managed = False
-        # Head: layers 0-21, Tail: layers 21-40
-        self._head_end_layer = 21
-        self._tail_start_layer = 21
+        self._head_end_layer = config.split_layer
+        self._tail_start_layer = config.split_layer
+        self._head_gpu = config.head_gpu
+        self._tail_gpu = config.tail_gpu
+        self._total_layers = config.total_layers
 
     async def check_existing(self) -> bool:
         return await self._check_health(HEAD_URL) and await self._check_health(TAIL_URL)
@@ -663,8 +671,9 @@ class ServiceManager:
 
     async def start_services(self) -> bool:
         local_ip = extract_ip()
-        logger.info("Starting services with local IP: %s (layers 0-%d / %d-40)",
-                     local_ip, self._head_end_layer, self._tail_start_layer)
+        logger.info("Starting services with local IP: %s (GPU %d: layers 0-%d / GPU %d: layers %d-%d)",
+                     local_ip, self._head_gpu, self._head_end_layer,
+                     self._tail_gpu, self._tail_start_layer, self._total_layers)
 
         # Clean up any stale processes
         self._stop_managed_procs()
@@ -683,14 +692,14 @@ class ServiceManager:
             "--max-model-len", str(self._config.max_model_len),
         ]
         self._head_proc = subprocess.Popen(
-            head_cmd, env={**os.environ, "CUDA_VISIBLE_DEVICES": "0"},
+            head_cmd, env={**os.environ, "CUDA_VISIBLE_DEVICES": str(self._head_gpu)},
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
         )
         self._managed = True
         if not await self._wait_for_healthy(HEAD_URL):
             logger.error("Head node failed to start")
             return False
-        logger.info("Head node healthy (layers 0-%d)", self._head_end_layer)
+        logger.info("Head node healthy (GPU %d, layers 0-%d)", self._head_gpu, self._head_end_layer)
 
         # Start tail node
         tail_cmd = [
@@ -705,13 +714,13 @@ class ServiceManager:
             "--molink-initial-peer", f"{local_ip}:{self._config.head_grpc_port}",
         ]
         self._tail_proc = subprocess.Popen(
-            tail_cmd, env={**os.environ, "CUDA_VISIBLE_DEVICES": "1"},
+            tail_cmd, env={**os.environ, "CUDA_VISIBLE_DEVICES": str(self._tail_gpu)},
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
         )
         if not await self._wait_for_healthy(TAIL_URL):
             logger.error("Tail node failed to start")
             return False
-        logger.info("Tail node healthy (layers %d-40)", self._tail_start_layer)
+        logger.info("Tail node healthy (GPU %d, layers %d-%d)", self._tail_gpu, self._tail_start_layer, self._total_layers)
         return True
 
     async def restart_after_oom(self) -> bool:
@@ -1211,7 +1220,7 @@ def generate_report(results: list[BenchmarkResult], sys_m: SystemMetrics | None,
     L.append("=" * 80)
     L.append(f"Date:      {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     L.append(f"Model:     {config.model_path}")
-    L.append(f"Pipeline:  GPU 0 (layers 0-21) -> GPU 1 (layers 21-40)")
+    L.append(f"Pipeline:  GPU {config.head_gpu} (layers 0-{config.split_layer}) -> GPU {config.tail_gpu} (layers {config.split_layer}-{config.total_layers})")
     L.append(f"Max len:   {config.max_model_len}")
     L.append("")
 
@@ -1346,7 +1355,7 @@ def generate_report(results: list[BenchmarkResult], sys_m: SystemMetrics | None,
         L.append("--- System Metrics ---")
         gs = sys_m.gpu_summary()
         for gid, g in sorted(gs.items()):
-            role = "Head (layers 0-21)" if gid == 0 else "Tail (layers 21-40)"
+            role = f"Head (layers 0-{config.split_layer})" if gid == config.head_gpu else f"Tail (layers {config.split_layer}-{config.total_layers})"
             L.append(f"  GPU {gid} ({role}): util avg={g['avg_util']:.1f}% max={g['max_util']:.1f}% "
                      f"| mem avg={g['avg_mem_pct']:.1f}% max={g['max_mem_pct']:.1f}%")
         cs = sys_m.cpu_summary()
@@ -1518,7 +1527,8 @@ class ChartGenerator:
         self._comm_data = comm_data or []
         self._pipeline_data = pipeline_data or []
         self._colors_out = {64: "#1f77b4", 512: "#ff7f0e", 1024: "#2ca02c", 2048: "#d62728"}
-        self._colors_gpu = {2: "#1f77b4", 3: "#ff7f0e"}
+        self._colors_gpu = {config.head_gpu: "#1f77b4", config.tail_gpu: "#ff7f0e"}
+        self._gpu_role = {config.head_gpu: "Head", config.tail_gpu: "Tail"}
 
     def generate_all(self):
         if not MATPLOTLIB_AVAILABLE:
@@ -1684,7 +1694,7 @@ class ChartGenerator:
         for gid in sorted(self._sys.samples[0].gpu_utils.keys()):
             utils = [s.gpu_utils.get(gid, 0) for s in self._sys.samples]
             ax.plot(times, utils, "-", color=self._colors_gpu.get(gid, "#333"),
-                    alpha=0.7, label=f"GPU {gid} ({'Head' if gid == 0 else 'Tail'})")
+                    alpha=0.7, label=f"GPU {gid} ({self._gpu_role.get(gid, '?')})")
         ax.set_ylabel("GPU Utilization (%)")
         ax.set_title("GPU Utilization Over Time")
         ax.legend()
@@ -1696,7 +1706,7 @@ class ChartGenerator:
         for gid in sorted(self._sys.samples[0].gpu_mem_pct.keys()):
             mems = [s.gpu_mem_pct.get(gid, 0) for s in self._sys.samples]
             ax.plot(times, mems, "-", color=self._colors_gpu.get(gid, "#333"),
-                    alpha=0.7, label=f"GPU {gid} ({'Head' if gid == 0 else 'Tail'})")
+                    alpha=0.7, label=f"GPU {gid} ({self._gpu_role.get(gid, '?')})")
         ax.set_xlabel("Time (s)")
         ax.set_ylabel("GPU Memory (%)")
         ax.set_title("GPU Memory Usage Over Time")
@@ -1836,8 +1846,38 @@ class ChartGenerator:
 # ── Main ────────────────────────────────────────────────────────────────────
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="MoLink v1 Benchmark")
+    parser.add_argument("--gpus", type=str, default="0,1",
+                        help="Comma-separated GPU IDs for head,tail (e.g. '0,1' or '2,3')")
+    parser.add_argument("--split-layer", type=int, default=21,
+                        help="Pipeline split point: head serves layers 0 to N, tail serves N to total_layers")
+    parser.add_argument("--total-layers", type=int, default=40,
+                        help="Total number of model layers")
+    parser.add_argument("--model", type=str, default=MODEL_PATH,
+                        help="Model path")
+    parser.add_argument("--max-model-len", type=int, default=MAX_MODEL_LEN,
+                        help="Max model sequence length")
+    return parser.parse_args()
+
+
 async def main():
-    config = BenchmarkConfig()
+    args = parse_args()
+
+    gpu_ids = [int(x.strip()) for x in args.gpus.split(",")]
+    if len(gpu_ids) != 2:
+        logger.error("--gpus must specify exactly 2 GPU IDs (e.g., '0,1')")
+        return
+
+    config = BenchmarkConfig(
+        model_path=args.model,
+        max_model_len=args.max_model_len,
+        head_gpu=gpu_ids[0],
+        tail_gpu=gpu_ids[1],
+        split_layer=args.split_layer,
+        total_layers=args.total_layers,
+    )
+
     all_results: list[BenchmarkResult] = []
     comm_data: list[tuple[BenchmarkResult, CommMetrics, CommMetrics]] = []
     pipeline_data: list[tuple[BenchmarkResult, PipelineMetrics]] = []
@@ -1846,7 +1886,9 @@ async def main():
     logger.info("=" * 60)
     logger.info("  MoLink v1 Benchmark  |  %s", timestamp)
     logger.info("  Model: %s", config.model_path)
-    logger.info("  Pipeline: layers 0-21 (GPU 0) / layers 21-40 (GPU 1)")
+    logger.info("  Pipeline: GPU %d (layers 0-%d) / GPU %d (layers %d-%d)",
+                config.head_gpu, config.split_layer,
+                config.tail_gpu, config.split_layer, config.total_layers)
     logger.info("  Output sizes: %s", config.output_token_sizes)
     logger.info("  Prompt sizes: %s", config.prompt_sizes_full)
     logger.info("  Concurrent tests: %d", len(config.concurrent_tests))
@@ -1906,7 +1948,7 @@ async def main():
 
         # Phase 8: Concurrent (with system monitoring)
         logger.info("=== Starting Concurrent Benchmarks ===")
-        monitor = SystemMonitor(gpus_to_monitor=[0, 1])
+        monitor = SystemMonitor(gpus_to_monitor=[config.head_gpu, config.tail_gpu])
         monitor.start()
         await asyncio.sleep(1)
         conc_results = await benchmark_concurrent(session, config, pg, svc)
