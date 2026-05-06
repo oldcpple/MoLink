@@ -18,6 +18,7 @@ class MolinkEngine(AsyncLLM):
         molink_start_layer = kwargs.pop("molink_start_layer", 0)
         molink_end_layer = kwargs.pop("molink_end_layer", -1)
         molink_enable_metrics = kwargs.pop("molink_enable_metrics", False)
+        molink_max_concurrent_batches = kwargs.pop("molink_max_concurrent_batches", 2)
 
         config = kwargs.get("vllm_config")
         config.__class__ = VllmConfig1
@@ -27,6 +28,7 @@ class MolinkEngine(AsyncLLM):
             start_layer=molink_start_layer,
             end_layer=molink_end_layer,
             enable_metrics=molink_enable_metrics,
+            max_concurrent_batches=molink_max_concurrent_batches,
         )
         config._update_attr(molink_config)
 

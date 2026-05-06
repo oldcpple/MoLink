@@ -217,6 +217,7 @@ async def init_app(
             start_layer=engine_args.molink_start_layer,
             end_layer=engine_args.molink_end_layer,
             enable_metrics=getattr(engine_args, "molink_enable_metrics", False),
+            max_concurrent_batches=getattr(engine_args, "molink_max_concurrent_batches", 2),
         )
         from molinkv1.config import VllmConfig1
         vllm_config.__class__ = VllmConfig1

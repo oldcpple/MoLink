@@ -80,7 +80,7 @@ class MolinkExecutor(MultiprocExecutor):
 
     @property
     def max_concurrent_batches(self) -> int:
-        return 1
+        return self.molink_config.max_concurrent_batches
 
     def __init__(self, vllm_config: VllmConfig, monitor_workers: bool = True):
         self.molink_config: "MolinkConfig" = getattr(

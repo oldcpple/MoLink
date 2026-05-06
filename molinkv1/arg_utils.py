@@ -45,6 +45,12 @@ class MolinkEngineArgs(AsyncEngineArgs):
             action="store_true",
             help="Enable MoLink communication metrics recording.",
         )
+        parser.add_argument(
+            "--molink-max-concurrent-batches",
+            type=int,
+            default=2,
+            help="Maximum number of concurrent batches in MoLink pipeline (default: 2).",
+        )
         return parser
 
     @classmethod
@@ -60,4 +66,5 @@ class MolinkEngineArgs(AsyncEngineArgs):
         engine_args.molink_start_layer = args.molink_start_layer
         engine_args.molink_end_layer = args.molink_end_layer
         engine_args.molink_enable_metrics = args.molink_enable_metrics
+        engine_args.molink_max_concurrent_batches = args.molink_max_concurrent_batches
         return engine_args
