@@ -8,6 +8,7 @@ collective_rpc.
 """
 
 import asyncio
+import collections
 import pickle
 import struct
 import threading
@@ -300,9 +301,6 @@ class WorkerNodeService(molink_pb2_grpc.MolinkServiceServicer):
         )
         stub = self._get_stub(next_server)
         await stub.PushIntermediateTensors(request)
-
-
-import collections  # noqa: E402 — needed for deque
 
 
 # ---------------------------------------------------------------------------

@@ -30,29 +30,14 @@ def extract_ip() -> str:
     return ip
 
 
-def find_free_port(start_port: int = 50051, protocol: str = "tcp") -> int:
-    """Find an available port for TCP/UDP on all interfaces.
-
-    Args:
-        start_port: The port number to start searching from.
-        protocol: The protocol type ('tcp' or 'udp').
-
-    Returns:
-        An available port number.
-    """
+def find_free_port(start_port: int = 50051) -> int:
+    """Find an available TCP port on all interfaces."""
     ip = "0.0.0.0"
     port = start_port
 
     while True:
         try:
-            if protocol == "tcp":
-                sock_type = socket.SOCK_STREAM
-            elif protocol == "udp":
-                sock_type = socket.SOCK_DGRAM
-            else:
-                raise ValueError("Protocol must be 'tcp' or 'udp'")
-
-            with socket.socket(socket.AF_INET, sock_type) as s:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 s.bind((ip, port))
             return port
@@ -77,30 +62,6 @@ def get_grpc_options(max_message_size_mb: int = 200) -> List[Tuple[str, int]]:
         ("grpc.max_send_message_length", max_size),
         ("grpc.max_receive_message_length", max_size),
     ]
-
-
-@dataclass
-class NodeInfo:
-    """Information about a node in the pipeline."""
-
-    ip: str  # host:port
-    start_layer: int
-    end_layer: int
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "ip": self.ip,
-            "start_layer": self.start_layer,
-            "end_layer": self.end_layer,
-        }
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "NodeInfo":
-        return cls(
-            ip=data["ip"],
-            start_layer=data["start_layer"],
-            end_layer=data["end_layer"],
-        )
 
 
 @dataclass

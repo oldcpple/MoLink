@@ -11,11 +11,6 @@ class MolinkEngineArgs(AsyncEngineArgs):
         parser = super(MolinkEngineArgs, cls).add_cli_args(parser)
         # Individual MoLink arguments
         parser.add_argument(
-            "--molink-enabled",
-            action="store_true",
-            help="Enable MoLink cross-node pipeline parallelism.",
-        )
-        parser.add_argument(
             "--molink-initial-peer",
             type=str,
             default=None,
@@ -46,29 +41,6 @@ class MolinkEngineArgs(AsyncEngineArgs):
             help="Maximum gRPC message size in MB.",
         )
         parser.add_argument(
-            "--molink-connection-timeout-s",
-            type=float,
-            default=30.0,
-            help="Timeout for gRPC connections in seconds.",
-        )
-        parser.add_argument(
-            "--molink-heartbeat-interval-s",
-            type=float,
-            default=5.0,
-            help="Interval for health check heartbeats in seconds.",
-        )
-        parser.add_argument(
-            "--molink-enable-compression",
-            action="store_true",
-            help="Enable gRPC message compression.",
-        )
-        parser.add_argument(
-            "--molink-num-delivery-workers",
-            type=int,
-            default=2,
-            help="Number of workers for async tensor delivery.",
-        )
-        parser.add_argument(
             "--molink-enable-metrics",
             action="store_true",
             help="Enable MoLink communication metrics recording.",
@@ -83,7 +55,6 @@ class MolinkEngineArgs(AsyncEngineArgs):
         engine_args = cls(
             **{attr: getattr(args, attr) for attr in attrs if hasattr(args, attr)}
         )
-        engine_args.molink_enabled = args.molink_enabled
         engine_args.molink_initial_peer = args.molink_initial_peer
         engine_args.molink_grpc_port = args.molink_grpc_port
         engine_args.molink_start_layer = args.molink_start_layer
