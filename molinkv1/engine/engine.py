@@ -18,6 +18,7 @@ class MolinkEngine(AsyncLLM):
         molink_grpc_port = kwargs.pop("molink_grpc_port", 0)
         molink_start_layer = kwargs.pop("molink_start_layer", 0)
         molink_end_layer = kwargs.pop("molink_end_layer", -1)
+        molink_enable_metrics = kwargs.pop("molink_enable_metrics", False)
 
         config = kwargs.get("vllm_config")
         config.__class__ = VllmConfig1
@@ -27,6 +28,7 @@ class MolinkEngine(AsyncLLM):
             grpc_port=molink_grpc_port,
             start_layer=molink_start_layer,
             end_layer=molink_end_layer,
+            enable_metrics=molink_enable_metrics,
         )
         config._update_attr(molink_config)
 
@@ -89,4 +91,5 @@ class MolinkEngine(AsyncLLM):
             molink_grpc_port=engine_args.molink_grpc_port,
             molink_start_layer=engine_args.molink_start_layer,
             molink_end_layer=engine_args.molink_end_layer,
+            molink_enable_metrics=getattr(engine_args, "molink_enable_metrics", False),
         )

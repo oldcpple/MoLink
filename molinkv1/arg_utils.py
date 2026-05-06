@@ -68,6 +68,11 @@ class MolinkEngineArgs(AsyncEngineArgs):
             default=2,
             help="Number of workers for async tensor delivery.",
         )
+        parser.add_argument(
+            "--molink-enable-metrics",
+            action="store_true",
+            help="Enable MoLink communication metrics recording.",
+        )
         return parser
 
     @classmethod
@@ -83,4 +88,5 @@ class MolinkEngineArgs(AsyncEngineArgs):
         engine_args.molink_grpc_port = args.molink_grpc_port
         engine_args.molink_start_layer = args.molink_start_layer
         engine_args.molink_end_layer = args.molink_end_layer
+        engine_args.molink_enable_metrics = args.molink_enable_metrics
         return engine_args

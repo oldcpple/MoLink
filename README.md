@@ -5,8 +5,8 @@
 # MoLink: Distributed Large Language Model Serving System
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
-[![vLLM 0.11.2](https://img.shields.io/badge/vLLM-0.11.2-green.svg)](https://github.com/vllm-project/vllm)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![vLLM 0.19.0+](https://img.shields.io/badge/vLLM-0.19.0+-green.svg)](https://github.com/vllm-project/vllm)
 
 **MoLink** (***Mo***del-***Link***) is an advanced distributed LLM serving system designed to enable high-performance inference of large language models across geographically distributed and heterogeneous computing resources. By reconciling computation and communication overhead, MoLink delivers efficient LLM serving even when resources are spread across the Internet or connected via consumer-grade networks.
 
@@ -32,11 +32,11 @@ MoLink v1 introduces a redesigned architecture with enhanced scalability and per
 
 ## 📋 Prerequisites
 
-MoLink is built on top of **vLLM v0.11.2** and inherits its system requirements:
+MoLink is built on top of **vLLM v0.19.0+** and inherits its system requirements:
 
 - **GPU**: NVIDIA GPUs with compute capability 8.0+ (3090, etc.)
 - **CUDA**: Version 11.8 or higher
-- **Python**: Version 3.8 or higher
+- **Python**: Version 3.10 or higher
 
 For detailed vLLM requirements, refer to the [official documentation](https://docs.vllm.ai/en/latest/).
 
@@ -130,15 +130,21 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 python -m molinkv1.entrypoints.api_server \
 
 ### Key Configuration Parameters
 
-| Parameter | Description | Example |
+| Parameter | Description | Default |
 |-----------|-------------|---------|
-| `--molink-enabled` | Enable distributed MoLink mode | - |
-| `--molink-grpc-port` | Port for inter-node communication | `50061` |
+| `--molink-enabled` | Enable distributed MoLink mode | `False` |
+| `--molink-grpc-port` | Port for inter-node communication | `0` (auto) |
 | `--molink-start-layer` | Starting layer index (inclusive) | `0` |
-| `--molink-end-layer` | Ending layer index (exclusive, -1 for last) | `20` or `-1` |
-| `--molink-initial-peer` | Bootstrap peer address | `10.0.0.1:50061` |
-| `--tensor-parallel-size` | Number of GPUs for tensor parallelism | `2` |
-| `--max-model-len` | Maximum sequence length | `4096` |
+| `--molink-end-layer` | Ending layer index (exclusive, -1 for last) | `-1` |
+| `--molink-initial-peer` | Bootstrap peer address (head node if unset) | `None` |
+| `--molink-max-message-size-mb` | Maximum gRPC message size in MB | `200` |
+| `--molink-connection-timeout-s` | Timeout for gRPC connections in seconds | `30.0` |
+| `--molink-heartbeat-interval-s` | Interval for health check heartbeats in seconds | `5.0` |
+| `--molink-enable-compression` | Enable gRPC message compression | `False` |
+| `--molink-enable-metrics` | Enable communication metrics recording | `False` |
+| `--molink-num-delivery-workers` | Number of workers for async tensor delivery | `2` |
+| `--tensor-parallel-size` | Number of GPUs for tensor parallelism | `1` |
+| `--max-model-len` | Maximum sequence length | Model default |
 
 ## 🔌 API Usage
 
@@ -156,10 +162,10 @@ curl http://localhost:8080/generate \
 
 ### OpenAI-Compatible API
 
-Start the OpenAI-compatible server:
+The original `molink` package provides an OpenAI-compatible server:
 
 ```bash
-python -m molinkv1.entrypoints.openai.api_server \
+python -m molink.entrypoints.openai.api_server \
     --model Qwen/Qwen3-14B \
     --molink-enabled \
     --molink-grpc-port 50061 \
@@ -206,6 +212,16 @@ response = client.chat.completions.create(
 
 print(response.choices[0].message.content)
 ```
+
+### Monitoring
+
+MoLink exposes monitoring endpoints on the API server:
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Health check |
+| `/molink_metrics` | GET | Get communication layer metrics (service metrics, delivery metrics) |
+| `/molink_metrics/reset` | POST | Reset communication layer metrics |
 
 
 ## 📄 License

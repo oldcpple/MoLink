@@ -133,9 +133,24 @@ class WorkerNodeService(molink_pb2_grpc.MolinkServiceServicer):
         # Thread-safe metrics
         self._metrics_lock = threading.Lock()
         self._metrics_deque = collections.deque(maxlen=2000)
+        self._metrics_enabled = False
 
         # Serialize pipeline-step execution so only one _run_step runs at a time.
         self._step_lock = asyncio.Lock()
+
+    def _record_metric(self, metric: dict):
+        if not self._metrics_enabled:
+            return
+        with self._metrics_lock:
+            self._metrics_deque.append(metric)
+
+    def get_metrics(self) -> list[dict]:
+        with self._metrics_lock:
+            return list(self._metrics_deque)
+
+    def reset_metrics(self):
+        with self._metrics_lock:
+            self._metrics_deque.clear()
 
     def _get_stub(self, address: str) -> molink_pb2_grpc.MolinkServiceStub:
         if address not in self._stub_cache:
@@ -159,24 +174,30 @@ class WorkerNodeService(molink_pb2_grpc.MolinkServiceServicer):
     # -- data handlers ------------------------------------------------------
 
     async def PushIntermediateTensors(self, request, context):
+        t_total_start = time.perf_counter()
         virtual_engine = request.virtual_engine
         intermediate_tensors_bytes = {}
+        recv_bytes = 0
         for entry in request.intermediate_tensors.tensors:
             intermediate_tensors_bytes[entry.key] = entry.tensor_data
+            recv_bytes += len(entry.tensor_data)
         grpc_metadata = deserialize_metadata(request.grpc_metadata)
         scheduler_output_bytes = request.scheduler_output
 
+        # Deserialize
+        t_deser_start = time.perf_counter()
         loop = asyncio.get_running_loop()
         intermediate_tensors = await loop.run_in_executor(
             None, _deserialize_tensors, intermediate_tensors_bytes
         )
-
         scheduler_output = cloudpickle.loads(scheduler_output_bytes)
+        t_deser_end = time.perf_counter()
 
-        # Serialize pipeline-step execution to prevent concurrent access
-        # to the shared model runner state.
+        # Compute
+        t_compute_start = time.perf_counter()
         async with self._step_lock:
             output = await self._run_step(scheduler_output, intermediate_tensors)
+        t_compute_end = time.perf_counter()
 
         # Route the result.
         server_list = grpc_metadata.get("server_list", [])
@@ -188,18 +209,31 @@ class WorkerNodeService(molink_pb2_grpc.MolinkServiceServicer):
 
         is_last_stage = (my_idx == len(server_list) - 1)
 
+        # Push result
+        t_push_start = time.perf_counter()
         if is_last_stage:
-            # Send result back to head node.
             head_server = grpc_metadata.get("head")
             output_bytes = cloudpickle.dumps(output, protocol=pickle.HIGHEST_PROTOCOL)
             await self._push_sampler_output(output_bytes, virtual_engine, head_server)
         else:
-            # Send intermediate tensors to next stage.
             next_server = server_list[my_idx + 1]
             tensors = output.tensors if isinstance(output, IntermediateTensors) else {"hidden_states": output}
             await self._push_intermediate_tensors(
                 tensors, scheduler_output_bytes, grpc_metadata, virtual_engine, next_server
             )
+        t_push_end = time.perf_counter()
+
+        self._record_metric({
+            "type": "worker_step",
+            "deserialize_ms": (t_deser_end - t_deser_start) * 1000,
+            "compute_ms": (t_compute_end - t_compute_start) * 1000,
+            "push_ms": (t_push_end - t_push_start) * 1000,
+            "total_ms": (time.perf_counter() - t_total_start) * 1000,
+            "is_last_stage": is_last_stage,
+            "recv_bytes": recv_bytes,
+            "virtual_engine": virtual_engine,
+            "timestamp": time.time(),
+        })
 
         return molink_pb2.GrpcResponseData(res=1)
 
@@ -451,6 +485,7 @@ class MolinkWorkerNode:
         )
         service._ip = self.ip
         service._grpc_port = self.grpc_port
+        service._metrics_enabled = config.enable_metrics
         self.service = service
 
         molink_pb2_grpc.add_MolinkServiceServicer_to_server(service, self.grpc_server)
@@ -523,7 +558,16 @@ class MolinkWorkerNode:
     # -- API surface for api_server.py compat --------------------------------
 
     def get_communication_metrics(self) -> dict:
-        return {"node": self.grpc_address, "is_head": False}
+        service_metrics = []
+        if hasattr(self, 'service') and self.service is not None:
+            service_metrics = self.service.get_metrics()
+        return {
+            "service_metrics": service_metrics,
+            "delivery_metrics": [],
+            "node": self.grpc_address,
+            "is_head": False,
+        }
 
     def reset_communication_metrics(self):
-        pass
+        if hasattr(self, 'service') and self.service is not None:
+            self.service.reset_metrics()
