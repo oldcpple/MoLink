@@ -89,7 +89,7 @@ class MolinkExecutor(MultiprocExecutor):
 
         if self.molink_config is None:
             from molinkv1.config import MolinkConfig
-            self.molink_config = MolinkConfig(enabled=True)
+            self.molink_config = MolinkConfig()
 
         # Initialize MoLink parallel state BEFORE parent initialization
         start_layer, end_layer = self.molink_config.get_serving_layers()

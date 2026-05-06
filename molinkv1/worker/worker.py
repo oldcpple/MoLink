@@ -47,15 +47,6 @@ class MolinkWorker(Worker):
         self._molink_intermediate_tensors = None
         return tensors
 
-    def _molink_get_intermediate_tensors_cpu(self) -> Optional[IntermediateTensors]:
-        """Return stored intermediate tensors moved to CPU (for gRPC transfer)."""
-        tensors = self._molink_intermediate_tensors
-        self._molink_intermediate_tensors = None
-        if tensors is not None:
-            cpu_tensors = {k: v.cpu() for k, v in tensors.tensors.items()}
-            return IntermediateTensors(cpu_tensors)
-        return tensors
-
     def init_device(self):
         import vllm.v1.worker.gpu_worker as gpu_worker_module
 

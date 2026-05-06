@@ -21,9 +21,6 @@ logger = init_logger(__name__)
 
 class MolinkEngineCoreProc(EngineCoreProc):
 
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
-
     @staticmethod
     def run_engine_core(*args, dp_rank: int = 0, local_dp_rank: int = 0, **kwargs):
         """Launch MoLink EngineCore busy loop in background process."""

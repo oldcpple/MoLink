@@ -16,25 +16,22 @@ logger = init_logger(__name__)
 
 @dataclass
 class MolinkConfig:
-    enabled: bool = False
     initial_peer: Optional[str] = None
     grpc_port: int = 0
     start_layer: int = 0
     end_layer: int = -1
     max_message_size_mb: int = 200
-    connection_timeout_s: float = 30.0
-    heartbeat_interval_s: float = 5.0
-    enable_compression: bool = False
-    num_delivery_workers: int = 2
     enable_metrics: bool = False
+
+    @property
+    def enabled(self) -> bool:
+        """Auto-detect: MoLink is enabled when not serving all layers on a single node."""
+        return not (self.start_layer == 0 and self.end_layer == -1
+                    and not self.initial_peer)
 
     def __post_init__(self):
         if self.max_message_size_mb <= 0:
             raise ValueError("max_message_size_mb must be positive")
-        if self.connection_timeout_s <= 0:
-            raise ValueError("connection_timeout_s must be positive")
-        if self.num_delivery_workers <= 0:
-            raise ValueError("num_delivery_workers must be positive")
 
     @property
     def is_head_node(self) -> bool:

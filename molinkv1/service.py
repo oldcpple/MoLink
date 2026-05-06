@@ -83,13 +83,6 @@ class MolinkService(molink_pb2_grpc.MolinkServiceServicer):
         with self._metrics_lock:
             self._metrics_deque.clear()
 
-    def record_head_compute(self, compute_ms: float):
-        self._record_metric({
-            "type": "head_compute",
-            "compute_ms": compute_ms,
-            "timestamp": time.time(),
-        })
-
     async def JoinPipeline(
         self, request: molink_pb2.NodeInfo, context
     ) -> molink_pb2.GrpcResponseData:

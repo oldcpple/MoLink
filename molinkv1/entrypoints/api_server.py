@@ -197,16 +197,21 @@ async def init_app(
 
     engine_args = MolinkEngineArgs.from_cli_args(args)
 
-    is_worker = bool(getattr(args, "molink_initial_peer", None))
+    # Auto-detect MoLink mode:
+    # - Worker node: has --molink-initial-peer
+    # - Head node: layers are explicitly split (start!=0 or end!=-1)
+    # - Single node: default layer range, no peer → vanilla vLLM
+    has_peer = bool(engine_args.molink_initial_peer)
+    has_layer_split = not (
+        engine_args.molink_start_layer == 0 and engine_args.molink_end_layer == -1
+    )
 
     if llm_engine is not None:
         engine = llm_engine
-    elif is_worker:
+    elif has_peer:
         from molinkv1.engine.worker_node import MolinkWorkerNode
         vllm_config = engine_args.create_engine_config(UsageContext.API_SERVER)
-        # Attach molink_config to vllm_config so the worker node can read it.
         molink_config = MolinkConfig(
-            enabled=True,
             initial_peer=engine_args.molink_initial_peer,
             grpc_port=engine_args.molink_grpc_port,
             start_layer=engine_args.molink_start_layer,
@@ -223,8 +228,14 @@ async def init_app(
         vllm_config.scheduler_config.async_scheduling = False
 
         engine = MolinkWorkerNode(vllm_config)
-    else:
+    elif has_layer_split:
         engine = MolinkEngine.from_engine_args(
+            engine_args, usage_context=UsageContext.API_SERVER
+        )
+    else:
+        # Single node — vanilla vLLM, no MoLink overhead
+        from vllm.v1.engine.async_llm import AsyncLLM
+        engine = AsyncLLM.from_engine_args(
             engine_args, usage_context=UsageContext.API_SERVER
         )
 

@@ -13,7 +13,6 @@ logger = init_logger(__name__)
 class MolinkEngine(AsyncLLM):
 
     def __init__(self, *args, **kwargs) -> None:
-        molink_enabled = kwargs.pop("molink_enabled", False)
         molink_initial_peer = kwargs.pop("molink_initial_peer", None)
         molink_grpc_port = kwargs.pop("molink_grpc_port", 0)
         molink_start_layer = kwargs.pop("molink_start_layer", 0)
@@ -23,7 +22,6 @@ class MolinkEngine(AsyncLLM):
         config = kwargs.get("vllm_config")
         config.__class__ = VllmConfig1
         molink_config = MolinkConfig(
-            enabled=molink_enabled,
             initial_peer=molink_initial_peer,
             grpc_port=molink_grpc_port,
             start_layer=molink_start_layer,
@@ -86,7 +84,6 @@ class MolinkEngine(AsyncLLM):
             start_engine_loop=start_engine_loop,
             usage_context=usage_context,
             stat_loggers=stat_loggers,
-            molink_enabled=engine_args.molink_enabled,
             molink_initial_peer=engine_args.molink_initial_peer,
             molink_grpc_port=engine_args.molink_grpc_port,
             molink_start_layer=engine_args.molink_start_layer,
