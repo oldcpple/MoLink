@@ -56,6 +56,7 @@ class MolinkService(molink_pb2_grpc.MolinkServiceServicer):
         # Thread-safe metrics store (no pp_lock — micro-batches overlap freely)
         self._metrics_lock = threading.Lock()
         self._metrics_deque: deque = deque(maxlen=2000)
+        self._metrics_enabled = False
 
         # Queues for inter-stage communication
         # input_queue: receives (scheduler_output, intermediate_tensors, grpc_metadata)
@@ -69,6 +70,8 @@ class MolinkService(molink_pb2_grpc.MolinkServiceServicer):
         logger.info(f"MoLink service initialized for node {head_ip}")
 
     def _record_metric(self, metric: dict):
+        if not self._metrics_enabled:
+            return
         with self._metrics_lock:
             self._metrics_deque.append(metric)
 

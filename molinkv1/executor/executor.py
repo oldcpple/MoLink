@@ -11,6 +11,7 @@ import os
 import pickle
 import struct
 import threading
+import time
 import traceback
 from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -182,6 +183,13 @@ class MolinkExecutor(MultiprocExecutor):
             f"Serving layers: {start_layer}-{end_layer}"
         )
 
+        # Start periodic metrics flush to temp file (read by api_server).
+        if config.enable_metrics:
+            self._metrics_flush_thread = threading.Thread(
+                target=self._metrics_flush_loop, daemon=True, name="MolinkMetricsFlush"
+            )
+            self._metrics_flush_thread.start()
+
     def _start_event_loop_thread(self) -> None:
         """Start a thread with an event loop for asyncio operations."""
         loop_ready = threading.Event()
@@ -216,6 +224,7 @@ class MolinkExecutor(MultiprocExecutor):
             start_layer=start_layer,
             end_layer=end_layer,
         )
+        self.molink_service._metrics_enabled = config.enable_metrics
 
         molink_pb2_grpc.add_MolinkServiceServicer_to_server(
             self.molink_service, self.grpc_server
@@ -314,6 +323,15 @@ class MolinkExecutor(MultiprocExecutor):
         if self.molink_config.is_head_node and not self._is_molink_last_stage():
             if scheduler_output.total_num_scheduled_tokens > 0:
                 self._scheduler_output_queue.append(scheduler_output)
+                t_start = time.perf_counter()
+                result = super().execute_model(scheduler_output, non_block)
+                self.molink_service._record_metric({
+                    "type": "head_compute",
+                    "compute_ms": (time.perf_counter() - t_start) * 1000,
+                    "num_tokens": scheduler_output.total_num_scheduled_tokens,
+                    "timestamp": time.time(),
+                })
+                return result
 
         return super().execute_model(scheduler_output, non_block)
 
@@ -332,6 +350,7 @@ class MolinkExecutor(MultiprocExecutor):
         """Orchestrate cross-node pipeline and return final ModelRunnerOutput."""
 
         async def _do_pipeline() -> ModelRunnerOutput:
+            t_total_start = time.perf_counter()
             scheduler_output = self._scheduler_output_queue.popleft()
 
             # 1. Get intermediate tensors from local workers.
@@ -376,14 +395,17 @@ class MolinkExecutor(MultiprocExecutor):
                 )
 
             # 3. Serialize scheduler_output
+            t_ser_start = time.perf_counter()
             scheduler_output_bytes = cloudpickle.dumps(
                 scheduler_output, protocol=pickle.HIGHEST_PROTOCOL
             )
+            t_ser_end = time.perf_counter()
 
             # 4. Send intermediate tensors to next node (direct gRPC call).
             #    The worker node executes the model directly upon receiving
             #    the data — no separate trigger step is needed.
             next_server = server_list[1]
+            t_push_start = time.perf_counter()
             await self._push_intermediate_tensors(
                 intermediate_tensors.tensors,
                 scheduler_output_bytes,
@@ -391,13 +413,32 @@ class MolinkExecutor(MultiprocExecutor):
                 virtual_engine,
                 next_server,
             )
+            t_push_end = time.perf_counter()
 
             # 5. Wait for final result from output_queue
+            t_wait_start = time.perf_counter()
             output_bytes = await self.molink_service.output_queue[
                 virtual_engine
             ].get()
+            t_wait_end = time.perf_counter()
 
+            t_deser_start = time.perf_counter()
             result = cloudpickle.loads(output_bytes)
+            t_deser_end = time.perf_counter()
+
+            self.molink_service._record_metric({
+                "type": "head_pipeline",
+                "serialize_scheduler_ms": (t_ser_end - t_ser_start) * 1000,
+                "push_intermediate_ms": (t_push_end - t_push_start) * 1000,
+                "wait_result_ms": (t_wait_end - t_wait_start) * 1000,
+                "deserialize_result_ms": (t_deser_end - t_deser_start) * 1000,
+                "result_bytes": len(output_bytes),
+                "total_pipeline_ms": (time.perf_counter() - t_total_start) * 1000,
+                "virtual_engine": virtual_engine,
+                "num_servers": len(server_list),
+                "timestamp": time.time(),
+            })
+
             return result
 
         future = asyncio.run_coroutine_threadsafe(
@@ -457,6 +498,14 @@ class MolinkExecutor(MultiprocExecutor):
             os.replace(tmp_path, path)
         except Exception:
             pass
+
+    def _metrics_flush_loop(self):
+        while not self._shutdown_event.is_set():
+            self._shutdown_event.wait(timeout=2.0)
+            try:
+                self._flush_metrics_to_file()
+            except Exception:
+                pass
 
     async def _async_shutdown(self) -> None:
         if self.grpc_server:

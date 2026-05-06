@@ -26,6 +26,7 @@ class MolinkConfig:
     heartbeat_interval_s: float = 5.0
     enable_compression: bool = False
     num_delivery_workers: int = 2
+    enable_metrics: bool = False
 
     def __post_init__(self):
         if self.max_message_size_mb <= 0:

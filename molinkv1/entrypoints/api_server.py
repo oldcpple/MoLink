@@ -45,9 +45,19 @@ async def health() -> Response:
 
 @app.get("/molink_metrics")
 async def get_molink_metrics() -> Response:
-    """Get communication layer metrics from the executor process."""
-    # The executor writes metrics to a temp file keyed by gRPC port.
-    # We can determine the gRPC port from the engine's molink config.
+    """Get communication layer metrics."""
+    # Try direct engine access first (works for MolinkWorkerNode and
+    # any engine that implements get_communication_metrics directly).
+    if engine is not None and hasattr(engine, "get_communication_metrics"):
+        try:
+            data = engine.get_communication_metrics()
+            if data:
+                return JSONResponse(data)
+        except Exception:
+            pass
+
+    # Fall back to file-based approach (head node writes metrics from
+    # EngineCore subprocess to a temp file periodically).
     grpc_port = None
     if engine is not None:
         try:
@@ -63,28 +73,36 @@ async def get_molink_metrics() -> Response:
             with open(path) as fh:
                 return JSONResponse(json.load(fh))
         except FileNotFoundError:
-            return JSONResponse({"service_metrics": [], "delivery_metrics": [],
-                                 "node": None, "is_head": None})
+            pass
         except Exception as e:
             return JSONResponse({"error": str(e)}, status_code=500)
 
-    # Fallback: try any file (single-node case)
+    # Last resort: scan for any metrics file.
     import glob
     pattern = os.path.join(tempfile.gettempdir(), "molink_metrics_*.json")
-    files = glob.glob(pattern)
-    if not files:
-        return JSONResponse({"service_metrics": [], "delivery_metrics": [],
-                             "node": None, "is_head": None})
-    try:
-        with open(files[0]) as fh:
-            return JSONResponse(json.load(fh))
-    except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+    files = sorted(glob.glob(pattern))
+    if files:
+        try:
+            with open(files[-1]) as fh:
+                return JSONResponse(json.load(fh))
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+    return JSONResponse({"service_metrics": [], "delivery_metrics": [],
+                         "node": None, "is_head": None})
 
 
 @app.post("/molink_metrics/reset")
 async def reset_molink_metrics() -> Response:
-    """Reset communication layer metrics by deleting this node's metrics file."""
+    """Reset communication layer metrics."""
+    # Try direct engine access first.
+    if engine is not None and hasattr(engine, "reset_communication_metrics"):
+        try:
+            engine.reset_communication_metrics()
+        except Exception:
+            pass
+
+    # Also clean up the temp file.
     grpc_port = None
     if engine is not None:
         try:
@@ -193,6 +211,7 @@ async def init_app(
             grpc_port=engine_args.molink_grpc_port,
             start_layer=engine_args.molink_start_layer,
             end_layer=engine_args.molink_end_layer,
+            enable_metrics=getattr(engine_args, "molink_enable_metrics", False),
         )
         from molinkv1.config import VllmConfig1
         vllm_config.__class__ = VllmConfig1
