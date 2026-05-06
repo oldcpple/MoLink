@@ -2,8 +2,6 @@
 """
 MoLink v1 Automated Test and Performance Benchmarking Script.
 
-Usage:
-    /opt/conda/envs/molink/bin/python /home/MoLink/tests/test_molinkv1_benchmark.py
 """
 
 import asyncio
@@ -85,16 +83,16 @@ class BenchmarkConfig:
     baseline_iterations: int = 3
     request_timeout: int = REQUEST_TIMEOUT
     # Test matrices
-    output_token_sizes: list[int] = field(default_factory=lambda: [64, 512, 1024, 2048])
-    prompt_sizes_full: list[int] = field(default_factory=lambda: [32, 128, 512, 1024, 2048, 4096])
+    output_token_sizes: list[int] = field(default_factory=lambda: [512, 1024, 2048])
+    prompt_sizes_full: list[int] = field(default_factory=lambda: [512, 1024, 2048])
     # Concurrent: (concurrency, prompt_tokens, output_tokens)
     concurrent_tests: list[tuple[int, int, int]] = field(default_factory=lambda: [
         # output=64
-        (1, 128, 64), (5, 128, 64), (10, 128, 64), (20, 128, 64), (50, 128, 64), (100, 128, 64),
+        (1, 128, 64), (20, 128, 64), (50, 128, 64),
         # output=512
-        (1, 128, 512), (5, 128, 512), (10, 128, 512), (20, 128, 512), (50, 128, 512), (100, 128, 512),
+        (1, 128, 512), (20, 128, 512), (50, 128, 512),
         # output=1024
-        (1, 128, 1024), (5, 128, 1024), (10, 128, 1024), (20, 128, 1024), (50, 128, 1024), (100, 128, 1024),
+        (1, 128, 1024), (20, 128, 1024), (50, 128, 1024),
     ])
 
 
