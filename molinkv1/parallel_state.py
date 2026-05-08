@@ -17,11 +17,8 @@ logger = init_logger(__name__)
 _MOLINK_ENABLED: bool = False
 _MOLINK_START_LAYER: int = 0
 _MOLINK_END_LAYER: int = -1  # -1 means use default (all layers)
-_MOLINK_NUM_HIDDEN_LAYERS: Optional[int] = None
 _MOLINK_IS_FIRST_STAGE: bool = True
 _MOLINK_IS_LAST_STAGE: bool = True
-_MOLINK_PP_RANK: int = 0
-_MOLINK_PP_SIZE: int = 1
 
 
 def init_molink_parallel_state(
@@ -29,36 +26,20 @@ def init_molink_parallel_state(
     start_layer: int,
     end_layer: int,
     num_hidden_layers: Optional[int] = None,
-    pp_rank: int = 0,
-    pp_size: int = 1,
 ) -> None:
     """Initialize MoLink parallel state.
 
     This function sets up the global state for MoLink cross-node PP.
     When enabled, it overrides the default layer distribution.
-
-    Args:
-        enabled: Whether MoLink is enabled.
-        start_layer: The first layer this node handles (inclusive).
-        end_layer: The last layer this node handles (exclusive).
-                   -1 means use all remaining layers.
-        num_hidden_layers: Total number of hidden layers in the model.
-        pp_rank: The pipeline parallel rank of this node in the cluster.
-        pp_size: The total pipeline parallel size (number of nodes).
     """
     global _MOLINK_ENABLED, _MOLINK_START_LAYER, _MOLINK_END_LAYER
-    global _MOLINK_NUM_HIDDEN_LAYERS, _MOLINK_IS_FIRST_STAGE, _MOLINK_IS_LAST_STAGE
-    global _MOLINK_PP_RANK, _MOLINK_PP_SIZE
+    global _MOLINK_IS_FIRST_STAGE, _MOLINK_IS_LAST_STAGE
 
     _MOLINK_ENABLED = enabled
     _MOLINK_START_LAYER = start_layer
     _MOLINK_END_LAYER = end_layer
-    _MOLINK_NUM_HIDDEN_LAYERS = num_hidden_layers
-    _MOLINK_PP_RANK = pp_rank
-    _MOLINK_PP_SIZE = pp_size
 
     if enabled:
-        # Determine if this is first/last stage
         _MOLINK_IS_FIRST_STAGE = start_layer == 0
 
         if end_layer == -1:
@@ -66,30 +47,19 @@ def init_molink_parallel_state(
         elif num_hidden_layers is not None:
             _MOLINK_IS_LAST_STAGE = end_layer >= num_hidden_layers
         else:
-            # Conservative: assume last stage if end_layer == -1
             _MOLINK_IS_LAST_STAGE = end_layer == -1
 
         logger.info(
             f"MoLink parallel state initialized: "
             f"layers {start_layer}-{end_layer}, "
             f"is_first_stage={_MOLINK_IS_FIRST_STAGE}, "
-            f"is_last_stage={_MOLINK_IS_LAST_STAGE}, "
-            f"pp_rank={pp_rank}, pp_size={pp_size}"
+            f"is_last_stage={_MOLINK_IS_LAST_STAGE}"
         )
 
 
 def is_molink_enabled() -> bool:
     """Check if MoLink is enabled."""
     return _MOLINK_ENABLED
-
-
-def get_molink_layer_range() -> Tuple[int, int]:
-    """Get the layer range for this node.
-
-    Returns:
-        Tuple of (start_layer, end_layer).
-    """
-    return _MOLINK_START_LAYER, _MOLINK_END_LAYER
 
 
 def get_molink_pp_indices(
@@ -135,9 +105,6 @@ def get_molink_pp_indices(
         start_layer = 0
         end_layer = num_hidden_layers
 
-    print('*'*100)
-    print(start_layer, end_layer)
-
     return start_layer, end_layer
 
 
@@ -151,58 +118,16 @@ def is_molink_last_stage() -> bool:
     return _MOLINK_IS_LAST_STAGE
 
 
-def get_molink_pp_rank() -> int:
-    """Get the MoLink pipeline parallel rank."""
-    return _MOLINK_PP_RANK
-
-
-def get_molink_pp_size() -> int:
-    """Get the MoLink pipeline parallel size."""
-    return _MOLINK_PP_SIZE
-
-
-def update_molink_stage_info(num_hidden_layers: int) -> None:
-    """Update MoLink stage information after model config is loaded.
-
-    This should be called once the model's num_hidden_layers is known.
-
-    Args:
-        num_hidden_layers: Total number of hidden layers in the model.
-    """
-    global _MOLINK_NUM_HIDDEN_LAYERS, _MOLINK_IS_LAST_STAGE
-
-    if not _MOLINK_ENABLED:
-        return
-
-    _MOLINK_NUM_HIDDEN_LAYERS = num_hidden_layers
-
-    end_layer = _MOLINK_END_LAYER
-    if end_layer == -1:
-        end_layer = num_hidden_layers
-
-    _MOLINK_IS_LAST_STAGE = end_layer >= num_hidden_layers
-
-    logger.info(
-        f"MoLink stage info updated: "
-        f"num_hidden_layers={num_hidden_layers}, "
-        f"is_last_stage={_MOLINK_IS_LAST_STAGE}"
-    )
-
-
 def destroy_molink_parallel_state() -> None:
     """Destroy MoLink parallel state."""
     global _MOLINK_ENABLED, _MOLINK_START_LAYER, _MOLINK_END_LAYER
-    global _MOLINK_NUM_HIDDEN_LAYERS, _MOLINK_IS_FIRST_STAGE, _MOLINK_IS_LAST_STAGE
-    global _MOLINK_PP_RANK, _MOLINK_PP_SIZE
+    global _MOLINK_IS_FIRST_STAGE, _MOLINK_IS_LAST_STAGE
 
     _MOLINK_ENABLED = False
     _MOLINK_START_LAYER = 0
     _MOLINK_END_LAYER = -1
-    _MOLINK_NUM_HIDDEN_LAYERS = None
     _MOLINK_IS_FIRST_STAGE = True
     _MOLINK_IS_LAST_STAGE = True
-    _MOLINK_PP_RANK = 0
-    _MOLINK_PP_SIZE = 1
 
 
 # ============================================================================

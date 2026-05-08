@@ -8,7 +8,9 @@ change `vllm/entrypoints/openai/api_server.py` instead.
 
 import asyncio
 import json
+import os
 import ssl
+import tempfile
 from argparse import Namespace
 from collections.abc import AsyncGenerator
 from typing import Any
@@ -27,6 +29,7 @@ from vllm.utils.argparse_utils import FlexibleArgumentParser
 from vllm.utils.system_utils import set_ulimit
 from vllm.version import __version__ as VLLM_VERSION
 from molinkv1.arg_utils import MolinkEngineArgs
+from molinkv1.config import MolinkConfig
 from molinkv1.engine.engine import MolinkEngine
 logger = init_logger("vllm.entrypoints.api_server")
 
@@ -38,6 +41,92 @@ engine = None
 async def health() -> Response:
     """Health check."""
     return Response(status_code=200)
+
+
+@app.get("/molink_metrics")
+async def get_molink_metrics() -> Response:
+    """Get communication layer metrics."""
+    # Try direct engine access first (works for MolinkWorkerNode and
+    # any engine that implements get_communication_metrics directly).
+    if engine is not None and hasattr(engine, "get_communication_metrics"):
+        try:
+            data = engine.get_communication_metrics()
+            if data:
+                return JSONResponse(data)
+        except Exception:
+            pass
+
+    # Fall back to file-based approach (head node writes metrics from
+    # EngineCore subprocess to a temp file periodically).
+    grpc_port = None
+    if engine is not None:
+        try:
+            vllm_config = getattr(engine, "vllm_config", None)
+            molink_config = getattr(vllm_config, "molink_config", None) if vllm_config else None
+            grpc_port = getattr(molink_config, "grpc_port", None) if molink_config else None
+        except Exception:
+            pass
+
+    if grpc_port:
+        path = os.path.join(tempfile.gettempdir(), f"molink_metrics_{grpc_port}.json")
+        try:
+            with open(path) as fh:
+                return JSONResponse(json.load(fh))
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+    # Last resort: scan for any metrics file.
+    import glob
+    pattern = os.path.join(tempfile.gettempdir(), "molink_metrics_*.json")
+    files = sorted(glob.glob(pattern))
+    if files:
+        try:
+            with open(files[-1]) as fh:
+                return JSONResponse(json.load(fh))
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+    return JSONResponse({"service_metrics": [], "delivery_metrics": [],
+                         "node": None, "is_head": None})
+
+
+@app.post("/molink_metrics/reset")
+async def reset_molink_metrics() -> Response:
+    """Reset communication layer metrics."""
+    # Try direct engine access first.
+    if engine is not None and hasattr(engine, "reset_communication_metrics"):
+        try:
+            engine.reset_communication_metrics()
+        except Exception:
+            pass
+
+    # Also clean up the temp file.
+    grpc_port = None
+    if engine is not None:
+        try:
+            vllm_config = getattr(engine, "vllm_config", None)
+            molink_config = getattr(vllm_config, "molink_config", None) if vllm_config else None
+            grpc_port = getattr(molink_config, "grpc_port", None) if molink_config else None
+        except Exception:
+            pass
+
+    if grpc_port:
+        path = os.path.join(tempfile.gettempdir(), f"molink_metrics_{grpc_port}.json")
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+    else:
+        import glob
+        pattern = os.path.join(tempfile.gettempdir(), "molink_metrics_*.json")
+        for f in glob.glob(pattern):
+            try:
+                os.remove(f)
+            except Exception:
+                pass
+    return JSONResponse({"status": "ok"})
 
 
 @app.post("/generate")
@@ -107,13 +196,50 @@ async def init_app(
     global engine
 
     engine_args = MolinkEngineArgs.from_cli_args(args)
-    engine = (
-        llm_engine
-        if llm_engine is not None
-        else MolinkEngine.from_engine_args(
+
+    # Auto-detect MoLink mode:
+    # - Worker node: has --molink-initial-peer
+    # - Head node: layers are explicitly split (start!=0 or end!=-1)
+    # - Single node: default layer range, no peer → vanilla vLLM
+    has_peer = bool(engine_args.molink_initial_peer)
+    has_layer_split = not (
+        engine_args.molink_start_layer == 0 and engine_args.molink_end_layer == -1
+    )
+
+    if llm_engine is not None:
+        engine = llm_engine
+    elif has_peer:
+        from molinkv1.engine.worker_node import MolinkWorkerNode
+        vllm_config = engine_args.create_engine_config(UsageContext.API_SERVER)
+        molink_config = MolinkConfig(
+            initial_peer=engine_args.molink_initial_peer,
+            grpc_port=engine_args.molink_grpc_port,
+            start_layer=engine_args.molink_start_layer,
+            end_layer=engine_args.molink_end_layer,
+            enable_metrics=getattr(engine_args, "molink_enable_metrics", False),
+            max_concurrent_batches=getattr(engine_args, "molink_max_concurrent_batches", 2),
+        )
+        from molinkv1.config import VllmConfig1
+        vllm_config.__class__ = VllmConfig1
+        vllm_config._update_attr(molink_config)
+
+        # MoLink cross-node PP does not support async scheduling.
+        # Async scheduling stores sampled tokens on GPU and communicates
+        # them via NCCL PP broadcast, which doesn't work with gRPC.
+        vllm_config.scheduler_config.async_scheduling = False
+
+        engine = MolinkWorkerNode(vllm_config)
+    elif has_layer_split:
+        engine = MolinkEngine.from_engine_args(
             engine_args, usage_context=UsageContext.API_SERVER
         )
-    )
+    else:
+        # Single node — vanilla vLLM, no MoLink overhead
+        from vllm.v1.engine.async_llm import AsyncLLM
+        engine = AsyncLLM.from_engine_args(
+            engine_args, usage_context=UsageContext.API_SERVER
+        )
+
     app.state.engine_client = engine
     return app
 

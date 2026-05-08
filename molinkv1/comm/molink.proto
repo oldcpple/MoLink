@@ -27,6 +27,8 @@ message GrpcRequestData {
 message GrpcResponseData {
     int32 res = 1;  // 0 = failure, 1 = success
     string error_message = 2;
+    bytes output_data = 3;  // Serialized output from worker step
+    int32 virtual_engine = 4;  // Virtual engine ID for output
 }
 
 // Trigger request to start execution on a worker node

@@ -5,7 +5,7 @@ import warnings
 
 from molinkv1.comm import molink_pb2 as molink__pb2
 
-GRPC_GENERATED_VERSION = '1.76.0'
+GRPC_GENERATED_VERSION = '1.80.0'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 
