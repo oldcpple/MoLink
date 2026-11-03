@@ -2,257 +2,91 @@
     <img src="resources/images/original.png" width="200" height="200">
 </div>
 
-# MoLink: Distributed Large Language Model Serving System
+# MoLink v2: Heterogeneous Pipeline Serving over Constrained Networks
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![vLLM 0.19.0+](https://img.shields.io/badge/vLLM-0.19.0+-green.svg)](https://github.com/vllm-project/vllm)
+[![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
+[![vLLM 0.23.0](https://img.shields.io/badge/vLLM-0.23.0-green.svg)](https://github.com/vllm-project/vllm/tree/v0.23.0)
 
-**MoLink** (***Mo***del-***Link***) is a distributed LLM serving system that enables inference of large language models across geographically distributed and heterogeneous computing resources. By reconciling computation and communication overhead, MoLink delivers efficient LLM serving even when resources are spread across the Internet or connected via consumer-grade networks.
+**MoLink** serves one large LLM across machines that are far apart or poorly connected, and across GPUs of different classes.
+**MoLink v2** is a rewrite of that idea as a small, default-off patch on top of upstream vLLM v0.23.0,
+instead of the gRPC-based engine fork of v1. It targets one specific problem: with pipeline parallelism over a
+slow link (100 Mbps – 1 Gbps), the activation transfer between stages dominates every step, and the GPUs sit idle.
 
-## Key Features
+## What v2 changes
 
-- **Distributed Architecture**: Deploy LLMs across multiple servers with automatic pipeline parallelism
-- **Heterogeneous Support**: Run on mixed GPU configurations with different compute capabilities
-- **Flexible Layer Partitioning**: Customizable model splitting with configurable layer distribution
-- **API Compatibility**: Full compatibility with vLLM and OpenAI API standards
-- **Multi-Backend Support**: Works with various LLM architectures (LLaMA, Qwen, etc.)
+| Technique | What it does |
+|---|---|
+| **`pp_link`** | Cross-machine PP transport over ZMQ instead of NCCL `isend/irecv`: 32 KiB framing, two priority classes (decode can overtake in-flight prefill bytes), per-direction ack-window backpressure, fully asynchronous send/receive. |
+| **int4 boundary encoding** | Stage-boundary activations are group-quantized to int4 (int8 also available). |
+| **Residual merging** | Only `s = h + r` crosses the link; the next stage recovers `RMSNorm(s)` exactly with a fused add+RMSNorm. Together with int4, cross-machine bytes drop to 0.14× of stock. |
+| **Model Runner V2** | Use upstream's V2 executor so decode no longer serializes across the two stages. |
+| **Control-plane trimming** (`--tok-tail`) | The scheduler stops re-sending full prompt+output token lists for requests not scheduled in the previous step. |
+| **Predictive chunk scheduler** (optional, `--best-tpc`) | Fits step latency online and sizes prefill chunks to protect decode latency. |
 
-## Architecture Overview
+Every change is off unless a `HETVLLM_*` environment variable is set, so without them the patched tree behaves like upstream v0.23.0.
 
-MoLink v1 extends vLLM v0.19.0+ with cross-node pipeline parallelism via gRPC. Each node runs a subset of the model's transformer layers, and intermediate activations are transferred between nodes over gRPC.
+## Results (headline)
 
-### Two Node Roles
+Testbed: A = 2×RTX 4090, B = 2×RTX 3090, link throttled with `tc`. Same machines, same split, same time window as the stock-vLLM baseline.
 
-| Role | Description |
-|------|-------------|
-| **Head Node** | Runs the `MolinkEngine` (based on vLLM's `AsyncLLM`). Handles request scheduling, KV cache management, the first pipeline stage, and the HTTP API server. |
-| **Worker Node** | Runs a lightweight `MolinkWorkerNode` with an in-process `MolinkWorker`. Receives intermediate tensors via gRPC, executes its assigned layers, and forwards results to the next stage or back to the head. |
+| Setup | Result |
+|---|---|
+| Qwen3-30B-A3B, TP2×PP2, 40 paired tests, 100 Mbps – 1 Gbps | **1.91×** geometric-mean speedup vs stock vLLM (1.54× vs stock with Model Runner V2 forced) |
+| Long-prompt prefill, 100 Mbps, 48 × 8K prompts | 52.1 s vs 327.8 s (**6.29×**) |
+| Overload at 250 Mbps (300 s of sustained arrivals) | 153/155 requests meet all latency targets vs 0/155; median TTFT 1.0 s vs 49.2 s |
+| Qwen3-32B (dense), TP2×PP2 | 1.25× (1.67× at 100 Mbps) |
+| Qwen3-30B-A3B, PP4 (4090, 4090 \| 3090, 3090) | 2.53× vs stock PP4 (1.90× vs stock V2) |
+| Qwen3-8B, PP2 (1×4090 + 1×3090) | 1.97×; bubble rate 41%/39% vs 89%/81% |
 
+The advantage grows as the network gets slower. Boundary int4 quantization costs some accuracy; see
+[EVALUATION §8](docs/EVALUATION.md) for measured numbers and [§10](docs/EVALUATION.md) for limitations.
+All numbers are from one cluster and one snapshot of the code; they do not transfer to other hardware without re-measuring.
 
-### Source Code Structure
-
-```
-molinkv1/
-├── core/scheduler.py        # MolinkScheduler / MolinkAsyncScheduler (thin wrappers)
-├── engine/
-│   ├── engine.py            # MolinkEngine — head node engine (extends AsyncLLM)
-│   ├── core.py              # MolinkEngineCoreProc — engine core process override
-│   └── worker_node.py       # MolinkWorkerNode — lightweight worker node
-├── executor/executor.py     # MolinkExecutor — head node executor (extends MultiprocExecutor)
-├── worker/worker.py         # MolinkWorker — GPU worker with MoLink tensor passing
-├── service.py               # MolinkService — gRPC service for head node
-├── config.py                # MolinkConfig, MolinkSchedulerConfig
-├── parallel_state.py        # MoLink PP state and vLLM patching utilities
-├── arg_utils.py             # CLI argument definitions
-├── utils.py                 # IP detection, port finding, PipelineTopology
-├── comm/
-│   ├── molink.proto         # gRPC protocol definitions
-│   ├── molink_pb2.py        # Generated protobuf code
-│   └── molink_pb2_grpc.py   # Generated gRPC stubs
-└── entrypoints/api_server.py # HTTP API server
-```
-
-### Communication Protocol
-
-Inter-node communication uses gRPC with the following key RPCs defined in `molink.proto`:
-
-| RPC | Purpose |
-|-----|---------|
-| `JoinPipeline` | Worker registers with head node; head returns its `num_gpu_blocks` so the worker can cap its KV cache accordingly |
-| `PushIntermediateTensors` | Forward serialized intermediate activations + `SchedulerOutput` to the next stage |
-| `PushSamplerOutput` | Last stage returns final `ModelRunnerOutput` to the head node |
-| `HealthCheck` | Liveness probe |
-
-Tensors are serialized with a compact binary wire format: `[ndim][shape...][dtype_len][dtype_str][raw_bytes]`. bfloat16 tensors are handled specially via uint8 view conversion.
-
-## Prerequisites
-
-MoLink is built on top of **vLLM v0.19.0+** and inherits its system requirements:
-
-- **GPU**: NVIDIA GPUs with compute capability 8.0+ (e.g., RTX 3090, A100)
-- **CUDA**: Version 11.8 or higher
-- **Python**: Version 3.10 or higher
-
-For detailed vLLM requirements, refer to the [official documentation](https://docs.vllm.ai/en/latest/).
-
-## Installation
+## Quick start
 
 ```bash
-git clone https://github.com/oldcpple/MoLink.git
-cd MoLink
-pip install -e .
+# on BOTH machines
+git clone https://github.com/vllm-project/vllm.git && cd vllm
+git checkout 0fc695fc6d1d82e9a5ac6835ac8e4e1c83703665          # v0.23.0
+git apply /path/to/MoLink/patch/hetvllm-vllm-v0.23.0.patch
+uv venv --python 3.12 && . .venv/bin/activate
+VLLM_USE_PRECOMPILED=1 uv pip install -e . --torch-backend=auto
+uv pip install pyzmq aiohttp matplotlib
+
+# on machine A: describe the cluster, then start the engine with the final configuration
+cd MoLink/kit && cp cluster.env.example cluster.env && $EDITOR cluster.env
+set -a; . ./cluster.env; set +a
+python het.py up                      # ray: A is head, B joins
+python het.py start --best && python het.py wait
 ```
 
-## Usage Guide
+Machine B must be reachable by key-based, non-interactive ssh. The full procedure (one-shot paired benchmark, ablation,
+bubble-rate and accuracy runs, expected results and tolerances) is in [docs/REPRODUCE.md](docs/REPRODUCE.md).
 
-### Distributed Deployment
+## Repository layout
 
-> **Note:** If you are using GPUs with low compute capability (e.g., lower than sm80), set the attention backend:
-> ```bash
-> export VLLM_ATTENTION_BACKEND=TRITON_ATTN
-> ```
-
-#### Example: Deploying Qwen3-14B on Two Servers
-
-**Server 1** (Head Node — Layers 0-20):
-
-```bash
-python -m molinkv1.entrypoints.api_server \
-    --model Qwen/Qwen3-14B \
-    --molink-grpc-port 50061 \
-    --molink-start-layer 0 \
-    --molink-end-layer 20 \
-    --port 8080 \
-    --max-model-len 4096
+```
+README.md              this file
+docs/EVALUATION.md     full report: method, techniques, results, ablation, accuracy, limitations
+docs/REPRODUCE.md      install, configure, run, expected results
+patch/                 patch against vLLM v0.23.0 + per-file notes and env-var reference
+kit/                   cluster launcher, benchmark/replay, ablation, bubble-rate and accuracy tools
+data/                  raw replay JSON and summary CSVs behind every number and figure
+figs/                  figures used in the report
+make_figs.py           regenerates figs/ and data/*.csv from data/
+resources/images/      logo
 ```
 
-After startup, copy the gRPC address from the logs (e.g., `10.130.151.15:50061`).
+## Relationship to MoLink v1
 
-**Server 2** (Worker Node — Layers 20-end):
-
-```bash
-python -m molinkv1.entrypoints.api_server \
-    --model Qwen/Qwen3-14B \
-    --molink-grpc-port 50062 \
-    --molink-start-layer 20 \
-    --molink-end-layer -1 \
-    --port 9095 \
-    --max-model-len 4096 \
-    --molink-initial-peer 10.130.151.15:50061
-```
-
-### Single-Node Deployment
-
-When no layer splitting or peer is configured, MoLink falls back to standard vLLM:
-
-```bash
-python -m molinkv1.entrypoints.api_server \
-    --model meta-llama/Llama-2-70b-chat-hf \
-    --port 8080 \
-    --dtype half \
-    --max-model-len 4096
-```
-
-### Heterogeneous Deployment
-
-Different stages can use different tensor parallelism sizes:
-
-```bash
-# Stage 1: 2 GPUs with layers 0-20
-CUDA_VISIBLE_DEVICES=0,1 python -m molinkv1.entrypoints.api_server \
-    --model meta-llama/Llama-2-70b-chat-hf \
-    --tensor-parallel-size 2 \
-    --molink-start-layer 0 \
-    --molink-end-layer 20 \
-    --port 8080
-
-# Stage 2: 4 GPUs with layers 20-end
-CUDA_VISIBLE_DEVICES=0,1,2,3 python -m molinkv1.entrypoints.api_server \
-    --model meta-llama/Llama-2-70b-chat-hf \
-    --tensor-parallel-size 4 \
-    --molink-start-layer 20 \
-    --molink-end-layer -1 \
-    --molink-initial-peer <first-node-address> \
-    --port 9095
-```
-
-### Configuration Parameters
-
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `--molink-grpc-port` | Port for inter-node gRPC communication | `0` (auto) |
-| `--molink-start-layer` | First transformer layer this node handles (inclusive) | `0` |
-| `--molink-end-layer` | Last transformer layer this node handles (exclusive, `-1` = all remaining) | `-1` |
-| `--molink-initial-peer` | gRPC address of the head node to join. If unset, this node is the head. | `None` |
-| `--molink-max-message-size-mb` | Maximum gRPC message size in MB | `200` |
-| `--molink-enable-metrics` | Enable communication metrics recording | `False` |
-| `--molink-max-concurrent-batches` | Maximum concurrent batches in pipeline | `2` |
-| `--tensor-parallel-size` | Number of GPUs for intra-node tensor parallelism | `1` |
-| `--max-model-len` | Maximum sequence length | Model default |
-
-## API Usage
-
-### Generation API
-
-```bash
-curl http://localhost:8080/generate \
-    -H "Content-Type: application/json" \
-    -d '{
-        "prompt": "San Francisco is a",
-        "max_tokens": 20,
-        "temperature": 0
-    }'
-```
-
-### OpenAI-Compatible API
-
-The `molink` package provides an OpenAI-compatible server:
-
-```bash
-python -m molink.entrypoints.openai.api_server \
-    --model Qwen/Qwen3-14B \
-    --molink-grpc-port 50061 \
-    --molink-start-layer 0 \
-    --molink-end-layer -1
-```
-
-Use with cURL:
-
-```bash
-curl http://localhost:8080/v1/chat/completions \
-    -H "Content-Type: application/json" \
-    -H "Authorization: Bearer YOUR_API_KEY" \
-    -d '{
-        "model": "Qwen/Qwen3-14B",
-        "messages": [
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": "Hello!"}
-        ],
-        "temperature": 0.7,
-        "max_tokens": 100
-    }'
-```
-
-Use with OpenAI Python SDK:
-
-```python
-from openai import OpenAI
-
-client = OpenAI(
-    base_url="http://localhost:8080/v1",
-    api_key="your-api-key-here"
-)
-
-response = client.chat.completions.create(
-    model="Qwen/Qwen3-14B",
-    messages=[
-        {"role": "system", "content": "You are a helpful assistant."},
-        {"role": "user", "content": "Explain the theory of relativity."}
-    ],
-    temperature=0.7,
-    max_tokens=200
-)
-
-print(response.choices[0].message.content)
-```
-
-### Monitoring
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/health` | GET | Health check |
-| `/molink_metrics` | GET | Communication layer metrics (service metrics, delivery metrics) |
-| `/molink_metrics/reset` | POST | Reset communication metrics |
-
+v1 (gRPC pipeline between nodes, vLLM 0.19.0+, `molink/` and `molinkv1/` packages) is kept on the `main` branch and is
+not part of this branch. v2 does not reuse its code; it keeps the goal (LLM serving across distributed, heterogeneous,
+consumer-grade resources) and replaces the mechanism.
 
 ## License
 
-This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
-
-## Acknowledgments
-
-MoLink is built upon the excellent [vLLM](https://github.com/vllm-project/vllm) project. We thank the vLLM team for their outstanding work on efficient LLM serving.
+Apache 2.0, see [LICENSE](LICENSE). The patch applies to vLLM, which is also Apache 2.0.
 
 ## Citation
 
@@ -276,7 +110,3 @@ Lewei Jin, Kui Zhang, Yongqi Chen, Zhuoyifan, Renjie Li, Yi Gao, Bowei Yang, Zhe
   isbn = {979-8-89176-335-7}
 }
 ```
-
-## hetvllm: heterogeneous pipeline over constrained networks (vLLM v0.23.0)
-
-[`hetvllm/`](hetvllm/) contains a follow-up line of work on top of upstream vLLM v0.23.0: a ZMQ-based cross-machine PP link with int4 boundary encoding and residual merging, a predictive chunk scheduler, and the tooling to reproduce the evaluation (2×RTX 4090 + 2×RTX 3090 over 100 Mbps–1 Gbps links). See [`hetvllm/README.md`](hetvllm/README.md) for results, [`hetvllm/patch/`](hetvllm/patch/) for the vLLM patch and [`hetvllm/REPRODUCE.md`](hetvllm/REPRODUCE.md) for the steps.
