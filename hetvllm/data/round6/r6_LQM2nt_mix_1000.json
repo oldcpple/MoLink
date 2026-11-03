@@ -1,0 +1,25 @@
+{
+ "offered": 1.0,
+ "goodput": 0.0,
+ "good_frac": 0.0,
+ "per_cls": {
+  "long": "0/24",
+  "short": "0/48"
+ },
+ "n": 72,
+ "out_tok": 27648,
+ "out_tps_dur": 745.4,
+ "in_tok": 213504,
+ "done": 72,
+ "ttft_p50_long": 8869.0,
+ "ttft_p95_long": 18793.0,
+ "itlp95_max_long": 646.4,
+ "ttft_p50_short": 19958.0,
+ "ttft_p95_short": 20252.0,
+ "itlp95_max_short": 38.2,
+ "trace": "fixed_mix",
+ "rate": 1.0,
+ "dur": 45.0,
+ "wall": 37.1,
+ "out_tps_wall": 745.4
+}

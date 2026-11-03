@@ -1,0 +1,10 @@
+ vllm/distributed/parallel_state.py                 |   8 +
+ vllm/distributed/pp_link.py                        | 913 +++++++++++++++++++++
+ vllm/entrypoints/openai/completion/serving.py      |  16 +
+ ...,N=384,device_name=NVIDIA_GeForce_RTX_3090.json | 174 ++++
+ ...,N=384,device_name=NVIDIA_GeForce_RTX_4090.json | 174 ++++
+ vllm/v1/core/sched/output.py                       |  13 +
+ vllm/v1/core/sched/scheduler.py                    | 461 ++++++++++-
+ vllm/v1/engine/core.py                             |  13 +
+ vllm/v1/worker/gpu_worker.py                       | 225 ++++-
+ 9 files changed, 1991 insertions(+), 6 deletions(-)

@@ -1,0 +1,4 @@
+{"band": 100, "tc_bytes": 1348029375, "link_bytes_l0": 578650752}
+{"band": 250, "tc_bytes": 1289225799, "link_bytes_l0": 570503808}
+{"band": 500, "tc_bytes": 1266044807, "link_bytes_l0": 564471360}
+{"band": 1000, "tc_bytes": 1260597986, "link_bytes_l0": 565400448}

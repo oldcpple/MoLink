@@ -1,0 +1,5 @@
+{
+ "p1": " Paris. The capital of Germany is Berlin. The capital of Italy is Rome. The capital of Spain is Madrid. The capital of Portugal is Lisbon. The capital of the Netherlands is Amsterdam. The capital of Belgium is Brussels. The capital of Greece is Athens. The capital of Poland is Warsaw. The capital of the Czech",
+ "p2": "\n    if n <= 0:\n        return 0\n    elif n == 1:\n        return 1\n    else:\n        return fibonacci(n - 1) + fibonacci(n - 2)\n\n# Example usage:\nn = 10\nprint(f\"The {n}th Fibonacci number is {",
+ "p3": " the vapor pressure required for boiling is reached at a lower temperature. Is this correct? Also, if I have a pot of water at 100\u00b0C at sea level, and I move it to a high altitude where the atmospheric pressure is lower, will the water start boiling again? What happens to the temperature of"
+}

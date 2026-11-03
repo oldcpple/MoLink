@@ -1,0 +1,1 @@
+[{"idx": 0, "cls": "long", "in_len": 2048, "out_len": 1024, "ttft_ms": 2624.4, "itl_p95": 60.9, "itl_max": 130.4, "tpot_ms": 47.07, "n_tok": 1024, "err": null, "t_arrive": 0.0, "good": true}]

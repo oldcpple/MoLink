@@ -1,0 +1,21 @@
+{
+ "offered": 0.5,
+ "goodput": 0.387,
+ "good_frac": 0.761,
+ "per_cls": {
+  "long": "118/155"
+ },
+ "n": 155,
+ "out_tok": 19682,
+ "out_tps_dur": 64.6,
+ "in_tok": 917504,
+ "done": 130,
+ "ttft_p50_long": 1740.0,
+ "ttft_p95_long": 3944.0,
+ "itlp95_max_long": 1037.2,
+ "trace": "sat_long",
+ "rate": 0.5,
+ "dur": 300.0,
+ "wall": 304.8,
+ "out_tps_wall": 64.6
+}

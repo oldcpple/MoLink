@@ -276,3 +276,7 @@ Lewei Jin, Kui Zhang, Yongqi Chen, Zhuoyifan, Renjie Li, Yi Gao, Bowei Yang, Zhe
   isbn = {979-8-89176-335-7}
 }
 ```
+
+## hetvllm: heterogeneous pipeline over constrained networks (vLLM v0.23.0)
+
+[`hetvllm/`](hetvllm/) contains a follow-up line of work on top of upstream vLLM v0.23.0: a ZMQ-based cross-machine PP link with int4 boundary encoding and residual merging, a predictive chunk scheduler, and the tooling to reproduce the evaluation (2×RTX 4090 + 2×RTX 3090 over 100 Mbps–1 Gbps links). See [`hetvllm/README.md`](hetvllm/README.md) for results, [`hetvllm/patch/`](hetvllm/patch/) for the vLLM patch and [`hetvllm/REPRODUCE.md`](hetvllm/REPRODUCE.md) for the steps.

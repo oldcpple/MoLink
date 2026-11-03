@@ -1,0 +1,5 @@
+{
+ "p1": " Paris. The capital of the United Kingdom is London. The capital of Germany is Berlin. The capital of Spain is Madrid. The capital of Italy is Rome. The capital of Portugal is Lisbon. The capital of Sweden is Stockholm. The capital of Norway is Oslo. The capital of Denmark is Copenhagen. The capital of Finland",
+ "p2": "\n    if n <= 0:\n        return 0\n    elif n == 1:\n        return 1\n    else:\n        return fibonacci(n-1) + fibonacci(n-2)\n\nn = int(input(\"Enter a number: \"))\nprint(fibonacci(n))\n\n# This is a recursive",
+ "p3": " the boiling point of water is lower. For example, at 10,000 feet, water boils at 180\u00b0F, and at 15,000 feet, it boils at 162\u00b0F. How can we model this relationship using a linear equation, and what is"
+}
